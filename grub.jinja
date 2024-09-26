@@ -1,0 +1,57 @@
+{%- set cmdline_linux = 'GRUB_CMDLINE_LINUX' -%}
+{%- set cmdline_xen = 'GRUB_CMDLINE_XEN_DEFAULT' -%}
+{%- set all_options = [] -%}
+{%- macro grub_options(cmdline, name, options, pillar = None, default=True) %}
+  {% set yaml_name = "grub " + cmdline + "+=" + (options | replace(":", "_")) %}
+  {% set is_active = salt['pillar.get']('grub:' + pillar, default) if pillar else default %}
+  {% do all_options.append(yaml_name) %}
+  {% set line = cmdline + '="$' + cmdline + ' ' + options + '" # ' + name %}
+{{ yaml_name }}:
+  file.replace:
+    - name: /etc/default/grub
+    - pattern: '^( *{{ line | regex_escape }} *(\n|$))'
+    {% if is_active %}
+    - repl: '\1'
+    - order: 5
+    - append_if_not_found: True
+    - not_found_content: '{{ line }}'
+    {% else %}
+    - repl: ''
+    {% endif %}
+{% endmacro -%}
+
+{%- macro grub_list_option(cmdline, name, option, values, pillar=None, default=True) -%}
+  {% set is_active = salt['pillar.get']('grub:' + pillar, default) if pillar else default %}
+  {% set re_option = option | regex_escape %}
+  {% set re_cmdline = cmdline | regex_escape %}
+  {% for value in values %}
+    {% set yaml_name = "grub " + ("add " if is_active else "remove ") + cmdline + " " + (option | replace(":", "_")) + "=" + (value | replace(":", "_")) %}
+    {% do all_options.append(yaml_name) %}
+    {% set re_value = value | regex_escape %}
+{{ yaml_name }}:
+  file.replace:
+    - name: /etc/default/grub
+    - flags:
+      - MULTILINE
+    - order: 5
+    {% if is_active %}
+    - pattern: '(^[ \t]*{{ re_cmdline }}=(["''])\${{ re_cmdline }}[ \t](?:(?:(?!\2).)+[ \t])?{{ re_option }}=(?:(?:(?(3),|),*(?!{{ re_value }}(?:[ \t,]|\2))((?:(?!\2)[^ \t,])+))+)?)(,*{{ re_value }})?(?(4)(?=[, \t]|\2|)|(?=\2|[ \t]))'
+    - repl: '\1,{{ value }}'
+    - append_if_not_found: True
+    - not_found_content: '{{ cmdline }}="${{ cmdline }} {{ option }}={{ value }}"'
+      {% set fixer_yaml_name = yaml_name + " format fixer" %}
+      {% do all_options.append(fixer_yaml_name) %}
+{{ fixer_yaml_name }}:
+  file.replace:
+    - name: /etc/default/grub
+    - order: 6
+    - pattern: '(?<={{ re_option }}=),+'
+    - repl: ''
+    - onchanges:
+      - file: {{ yaml_name }}
+    {% else %}
+    - pattern: '(?:^[ \t]*{{ re_cmdline }}=([''"])\${{ re_cmdline }}[ \t]+{{ re_option }}=(?:{{ re_value }})?[ \t]*\1[ \t]*(?:\n|$))|((?:^|(?<=\n))[ \t]*{{ re_cmdline }}=([''"])\${{ re_cmdline }}[ \t](?:(?:(?!\3).)+[ \t])?{{ re_option }}=(?:(?:(?(4),)(?!{{ re_value }}(?:[, \t]|\3))((?:(?!\3)[^ \t,])+))+)?)(,)?{{ re_value }}(?(5)(?=$|\3|[ \t,])|,*)'
+    - repl: '\2'
+    {% endif %}
+  {% endfor %}
+{%- endmacro -%}

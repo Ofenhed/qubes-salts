@@ -1,0 +1,51 @@
+{# Usage:
+Create the files salt-build-targets.sls (where you define your build commands) and salt-build-targets.top (where you load the pillar into dom0).
+
+salt-build-targets.sls:
+salt-build-targets:
+  dracut: dracut -f
+  grub: grub2-mkconfig -o /boot/grub2/grub.cfg
+  daemon-reload: systemctl daemon-reload
+
+salt-build-targets.top:
+user:
+  dom0:
+    - salt-build-targets
+  
+#}
+
+{% from "formatting.jinja" import yaml_escape, sha256sum %}
+
+{% set tasks = salt['pillar.get']('salt-build-targets', {}) %}
+
+{%- macro task_command_filename(task) -%}
+  /usr/local/etc/salt/dependency-command-{{ sha256sum("task with dependency: " + task) }}
+{%- endmacro %}
+
+{%- macro task_trigger_filename(task) -%}
+  /tmp/salt-dependency-{{ sha256sum("task with dependency: " + task) }}
+{%- endmacro %}
+
+{%- macro trigger_salt_name(task) -%}
+Executing trigger {{ task }}
+{%- endmacro %}
+
+{%- macro trigger_as_dependency(task) -%}
+cmd: {{ yaml_string(trigger_salt_name(task), "\"") }}
+{%- endmacro %}
+
+{%- macro add_dependencies(task, caller='') %}
+  {%- set content = caller() %}
+  {%- set task_uid = sha256sum(content) %}
+"Task {{ yaml_escape(task, "\"") }} (uid={{ task_uid }})":
+  {%- if task not in tasks %}
+  test.fail_without_changes:
+    - name: "Task {{ task }} is not defined"
+  {%- else %}
+  file.touch:
+    - name: {{ task_trigger_filename(task) }}
+    - onchanges:
+{{ content | indent(8, first = True) }}
+
+  {%- endif %}
+{%- endmacro %}
