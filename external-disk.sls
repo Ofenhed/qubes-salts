@@ -139,8 +139,7 @@
             exit 1
         {%- endcall %}
 
-        ExecStop=/bin/bash -c
-        {%- call systemd_inline_bash() %}
+        {% macro shutdown_vms(kill) %}
             while true ; do
               pool_vms_raw=$(qvm-volume list -p "$qvm_pool" | tail -n +2 | awk '{ print $2 }' | sort -u)
               readarray -t pool_vms <<< "$pool_vms_raw"
@@ -154,9 +153,24 @@
                 echo "Pool has no running VMs"
                 break
               fi
+              {% if kill %}
+              echo "Killing {{ '$${#running_vms[@]}' }} VMs: $${running_vms[@]}"
+              qvm-kill "$${running_vms[@]}"
+              {% else %}
               echo "Shutting down {{ '$${#running_vms[@]}' }} VMs: $${running_vms[@]}"
               qvm-shutdown --wait "$${running_vms[@]}"
+              {% endif %}
             done
+        {% endmacro %}
+
+        ExecStop=/bin/bash -c
+        {%- call systemd_inline_bash() %}
+          {{ shutdown_vms(false) }}
+        {%- endcall %}
+
+        ExecStopPost=/bin/bash -c
+        {%- call systemd_inline_bash() %}
+            {{ shutdown_vms(true) }}
 
             luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$') ;
             local_device=$(cryptsetup status "$luks_name" | grep -Po '(?<=device:)\s*/dev/[a-z]+$' | grep -Po '(?<=/dev/)[a-z]+$') ;
