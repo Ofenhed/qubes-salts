@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import salt_warning %}
+{% from "formatting.jinja" import salt_warning, systemd_inline_bash %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Systemd ask password caps indicator " %}
 {% set module_name = "systemd-ask-password-caps-indicator" %}
-{% set mod_dir = "/lib/dracut/modules.d/90" + module_name %}
-{% set override_name = "systemd-ask-password-override.conf" %}
-{% set password_caps_lock_indicator_service_name = "password-caps-lock-indicator.service" %}
-{% set password_caps_lock_indicator_service_path = "/usr/lib/systemd/system/" + password_caps_lock_indicator_service_name %}
+{% set mod_dir = "/lib/dracut/modules.d/91" + module_name %}
+{% set systemd_dir = "/usr/lib/systemd/system" %}
+{% set password_caps_lock_indicator_service_name = "password-caps-lock-indicator" %}
+{% set password_caps_lock_indicator_service_filename = password_caps_lock_indicator_service_name + ".service" %}
 {% set set_leds_name = "set-tty-leds" %}
 {% set set_leds_dir = "/usr/bin" %}
 
@@ -29,7 +29,7 @@
     - group: root
     - mode: 555
     - replace: true
-    - require_in:
+    - require:
       - file: {{ mod_dir }}
     - contents: |
         #!/usr/bin/bash
@@ -39,7 +39,7 @@
         
         # Prerequisite check(s) for module.
         check() {
-            require_binaries setleds || return 1
+            require_binaries sh setleds flock sleep wc || return 1
         
             # Return 255 to only include the module, if another module requires it.
             return 255
@@ -48,7 +48,7 @@
         # Module dependency requirements.
         depends() {
             # This module has external dependency on other module(s).
-            echo systemd-ask-password
+            echo systemd-ask-password crypt
             # Return 0 to include the dependent module(s) in the initramfs.
             return 0
         }
@@ -57,13 +57,9 @@
         install() {
             # Install required libraries.
             inst "$moddir/{{ set_leds_name }}" "{{ set_leds_dir }}/{{ set_leds_name }}"
-            #if dracut_module_included "plymouth"; then
-            #    inst "$moddir/{{ override_name }}" "/etc/systemd/system/systemd-ask-password-plymouth.service.d/override.conf"
-            #fi
-            #inst "$moddir/{{ override_name }}" "/etc/systemd/system/systemd-ask-password-console.service.d/override.conf"
-            #inst "$moddir/{{ override_name }}" "/etc/systemd/system/systemd-ask-password-wall.service.d/override.conf"
-            inst_multiple setleds {{ password_caps_lock_indicator_service_path }}
-            $SYSTEMCTL -q --root "$initdir" enable {{ password_caps_lock_indicator_service_name }}
+            inst "$moddir/{{ password_caps_lock_indicator_service_filename }}" "{{ systemd_dir }}/{{ password_caps_lock_indicator_service_filename }}"
+            inst_multiple sh setleds wc flock sleep
+            $SYSTEMCTL -q --root "$initdir" enable '{{ password_caps_lock_indicator_service_filename }}'
         }
 
 {{p}}dracut_conf:
@@ -79,12 +75,12 @@
 
 {{p}}service:
   file.managed:
-    - name: {{ password_caps_lock_indicator_service_path }}
+    - name: {{ mod_dir }}/{{ password_caps_lock_indicator_service_filename }}
     - user: root
     - group: root
     - mode: 444
     - replace: true
-    - require_in:
+    - require:
       - file: {{ mod_dir }}
     - contents: |
         # {{ salt_warning }}
@@ -95,11 +91,26 @@
         Conflicts=cryptsetup.target
         
         [Service]
-        Type=oneshot
-        ExecStart={{ set_leds_dir }}/{{ set_leds_name }} -L +caps
-        ExecStop={{ set_leds_dir }}/{{ set_leds_name }} -L -caps
-        ExecStop={{ set_leds_dir }}/{{ set_leds_name }} -L
-        RemainAfterExit=yes
+        Type=simple
+        ExecStart=sh -c
+        {%- call systemd_inline_bash() %}
+        while true ; do
+            if [[ $(systemctl list-units -q --state=activating 'systemd-cryptsetup@*.service' | wc -l) -eq 0 ]]; then
+                sleep 0.5
+                continue
+            fi
+            count=$(systemctl list-units -q --state=active 'systemd-cryptsetup@*.service' | wc -l)
+            for ((i=0;i<=count;i++)); do
+                {{ set_leds_dir }}/{{ set_leds_name }} -L +caps
+                sleep 0.25
+                {{ set_leds_dir }}/{{ set_leds_name }} -L -caps
+                sleep 0.25
+            done
+            sleep 1
+        done
+        {%- endcall %}
+        ExecStopPost={{ set_leds_dir }}/{{ set_leds_name }} -L -caps
+        ExecStopPost={{ set_leds_dir }}/{{ set_leds_name }} -L
         
         [Install]
         WantedBy=systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service
@@ -111,7 +122,7 @@
     - group: root
     - mode: 555
     - replace: true
-    - require_in:
+    - require:
       - file: {{ mod_dir }}
     - contents: |
         #!/bin/sh
@@ -122,15 +133,11 @@
             i=$((i + 1))
         done
 
-{% call add_dependencies('daemon-reload') %}
-  - file: {{p}}service
-{% endcall %}
-
 {% call add_dependencies('dracut') %}
-  - file: {{p}}setup
   - file: {{p}}dracut_conf
-  - file: {{p}}set_leds
   - file: {{p}}service
+  - file: {{p}}set_leds
+  - file: {{p}}setup
 {% endcall %}
 
 {% endif %}
