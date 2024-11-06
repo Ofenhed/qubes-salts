@@ -62,8 +62,7 @@
 
         # Install the required file(s) and directories for the module in the initramfs.
         install() {
-            inst lspci
-            inst awk
+            inst_multiple lspci awk bash
             {% if (usbguard_rules | length) > 0 %}
             inst "$moddir/{{ usbguard_rule_filename }}" "/etc/usbguard/rules.d/{{ usbguard_rule_filename }}"
             {% endif %}
@@ -119,6 +118,8 @@
         Type=oneshot
 
         RemainAfterExit=yes
+
+        TimeoutSec=3min
         ExecStop=bash -c
         {%- call systemd_inline_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
@@ -156,7 +157,6 @@
                     BDF=0000:$dev
                     echo "Triggering driver scan for $dev"
                     echo -n "$BDF" > "/sys/bus/pci/drivers_probe"
-                    driver_dir="$(readlink /sys/bus/pci/devices/$BDF/driver)"
                 done
             ) || {
                 systemctl start --no-block usbguard.service

@@ -163,6 +163,8 @@
             done
         {% endmacro %}
 
+        TimeoutStopSec=3m
+
         ExecStop=/bin/bash -c
         {%- call systemd_inline_bash() %}
           {{ shutdown_vms(false) }}
