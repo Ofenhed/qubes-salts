@@ -11,8 +11,16 @@
 
 {% set module_name = "hide-all-usb-after-decrypt" %}
 {% set mod_dir = "/lib/dracut/modules.d/92" + module_name %}
-{% set unbind_usb_devices_service = "hide-all-usb-devices.service" %}
-{% set unbind_usb_devices_service_path = "/usr/lib/systemd/system/" + unbind_usb_devices_service %}
+{% macro unbind_pci_device_service(device = '') -%}
+  unbind-pci-device@{{device}}.service
+{%- endmacro %}
+{% macro bind_pciback_device_service(device = '') -%}
+  bind-pciback-device@{{device}}.service
+{%- endmacro %}
+{% set unbind_pci_devices_service = 'unbind-pci-devices.service' %}
+{% set unbind_pci_device_service_path = "/usr/lib/systemd/system/" + unbind_pci_device_service() %}
+{% set bind_pciback_device_service_path = "/usr/lib/systemd/system/" + bind_pciback_device_service() %}
+{% set unbind_pci_devices_service_path = "/usr/lib/systemd/system/" + unbind_pci_devices_service %}
 {% set usbguard_override = "/usr/lib/systemd/system/usbguard.service.d/hide-all-usb-after-decrypt.conf" %}
 {% set usbguard_rule_filename = "50-cryptsetup-devices.conf" %}
 {% set hook_script_name = "check-hide-all-usb-options.sh" %}
@@ -62,11 +70,11 @@
 
         # Install the required file(s) and directories for the module in the initramfs.
         install() {
-            inst_multiple lspci awk bash
+            inst_multiple lspci awk bash true
             {% if (usbguard_rules | length) > 0 %}
             inst "$moddir/{{ usbguard_rule_filename }}" "/etc/usbguard/rules.d/{{ usbguard_rule_filename }}"
             {% endif %}
-            inst_multiple {{ unbind_usb_devices_service_path }} {{ usbguard_override }}
+            inst_multiple {{ usbguard_override }} {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }}
             if ! dracut_module_included "qubes-pciback"; then
                 mkdir -p -m 0700 -- "$initdir/etc/usbguard"
                 mkdir -p -m 0755 -- "$systemdsystemunitdir/usbguard.service.d"
@@ -81,7 +89,6 @@
             else
                 inst_hook cmdline 05 "$moddir/{{ hook_script_name }}"
             fi
-            $SYSTEMCTL -q --root "$initdir" enable {{ unbind_usb_devices_service }}
         }
 
         installkernel() {
@@ -96,9 +103,9 @@
             }
         }
 
-{{p}}{{ unbind_usb_devices_service_path }}:
+{{p}}{{ unbind_pci_device_service_path }}:
   file.managed:
-    - name: {{ unbind_usb_devices_service_path }}
+    - name: {{ unbind_pci_device_service_path }}
     - user: root
     - group: root
     - mode: 444
@@ -108,11 +115,12 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        Description=Unbind USB after disk decryption
-        After=basic.target
-        Before=cryptsetup.target
-        Conflicts=cryptsetup.target
+        Description=Unbind %i after disk decryption
+        After={{ unbind_pci_devices_service }}
+        BindsTo={{ unbind_pci_devices_service }}
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
+        ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
+        ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
 
         [Service]
         Type=oneshot
@@ -126,51 +134,97 @@
                 echo "Detected system shutdown, skipping USB unbind"
                 exit 1
             fi
-            # Select all networking and USB devices
-            re='0(2|c03)'
+            set -e
 
-            HIDE_PCI=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"$re/ {print \$1}";}) ||
-                die 'Cannot obtain list of PCI devices to unbind.'
-            (
-                set -e
-                shopt -s nullglob
-                # ... and hide them so that they are no longer available to dom0
-                for dev in $HIDE_PCI; do
-                    BDF=0000:$dev
-                    if [ -e "/sys/bus/pci/drivers/pciback/$BDF" ]; then
-                        echo "Device $dev already unbound, skipping"
-                        continue
-                    fi
-                    if [ -e "/sys/bus/pci/devices/$BDF/driver" ]; then
-                        echo "Unbinding $dev"
-                        echo -n "$BDF" > "/sys/bus/pci/devices/$BDF/driver/unbind"
-                    fi
-                    if [ -e "/sys/bus/pci/devices/$BDF/driver_override" ]; then
-                        echo "Setting driver override for $dev"
-                        echo -n pciback > "/sys/bus/pci/devices/$BDF/driver_override"
-                    fi
-                done
-                echo "Disabling usbguard"
-                systemctl disable --quiet usbguard.service
-                systemctl stop usbguard.service
-                for dev in $HIDE_PCI; do
-                    BDF=0000:$dev
-                    echo "Triggering driver scan for $dev"
-                    echo -n "$BDF" > "/sys/bus/pci/drivers_probe"
-                done
-            ) || {
-                systemctl start --no-block usbguard.service
-                hypervisor_type=
-                if [ -r /sys/hypervisor/type ]; then
-                    read -r hypervisor_type < /sys/hypervisor/type || \
-                        die 'Cannot determine hypervisor type'
-                fi
-                if [ "$hypervisor_type" = "xen" ]; then
-                    die 'Cannot unbind PCI devices.'
-                else
-                    warn 'Cannot unbind PCI devices - not running under Xen'
-                fi
-            }
+            BDF="0000:%i"
+            if [ -e "/sys/bus/pci/drivers/pciback/$BDF" ]; then
+                echo "Device $dev already unbound, skipping"
+                continue
+            fi
+            if [ -e "/sys/bus/pci/devices/$BDF/driver" ]; then
+                echo "Unbinding $dev"
+                echo -n "$BDF" > "/sys/bus/pci/devices/$BDF/driver/unbind"
+            fi
+            if [ -e "/sys/bus/pci/devices/$BDF/driver_override" ]; then
+                echo "Setting driver override for %i"
+                echo -n pciback > "/sys/bus/pci/devices/$BDF/driver_override"
+            fi
+        {%- endcall %}
+
+        [Install]
+        WantedBy=basic.target
+
+{{p}}{{ unbind_pci_devices_service_path }}:
+  file.managed:
+    - name: {{ unbind_pci_devices_service_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - replace: true
+    - require:
+      - file: {{p}}{{ mod_dir }}
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        Description=Unbind PCI devices
+        Before=cryptsetup.target
+        Conflicts=cryptsetup.target
+        ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
+
+        [Service]
+        Type=oneshot
+
+        RemainAfterExit=yes
+
+        TimeoutSec=3min
+        ExecStop=bash -c
+        {%- call systemd_inline_bash() %}
+            systemctl disable --quiet usbguard.service
+            systemctl stop usbguard.service
+        {%- endcall %}
+
+        [Install]
+        WantedBy=basic.target
+
+{{p}}{{ bind_pciback_device_service_path }}:
+  file.managed:
+    - name: {{ bind_pciback_device_service_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - replace: true
+    - require:
+      - file: {{p}}{{ mod_dir }}
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        Description=Bind %i to pciback after disk decryption
+        After=basic.target
+        Requires={{ unbind_pci_device_service('%i') }}
+        Before={{ unbind_pci_devices_service }}
+        BindsTo={{ unbind_pci_devices_service }}
+        Before=cryptsetup.target
+        Conflicts=cryptsetup.target
+        ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
+        ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
+        ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
+
+        [Service]
+        Type=oneshot
+
+        RemainAfterExit=yes
+
+        TimeoutSec=3min
+        ExecStop=bash -c
+        {%- call systemd_inline_bash() %}
+            if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
+                echo "Detected system shutdown, skipping USB unbind"
+                exit 1
+            fi
+            set -e
+            BDF="0000:%i"
+            echo "Triggering driver scan for %i"
+            echo -n "$BDF" > "/sys/bus/pci/drivers_probe"
         {%- endcall %}
 
         [Install]
@@ -186,7 +240,7 @@
     - contents: |
         # {{ salt_warning }}
         [Service]
-        ExecCondition=/bin/sh -c '! systemctl is-active {{ unbind_usb_devices_service }}'
+        ExecCondition=/bin/sh -c '! systemctl is-active {{ unbind_pci_devices_service }}'
 
 {% for script in [hook_script_name, start_usbguard_script_name] %}
 {{p}}{{ mod_dir }}/{{ script }}:
@@ -209,6 +263,47 @@
             systemctl --no-block start usbguard.service
         fi
         {% endif %}
+        HIDE_NETWORK=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"02/ {print \$1}";}) ||
+            die 'Cannot obtain list of PCI devices to unbind.'
+        HIDE_USB=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"0c03/ {print \$1}";}) ||
+            die 'Cannot obtain list of PCI devices to unbind.'
+        shopt -s nullglob
+        # Allow the network interface to rebind directly at boot
+        for dev in $HIDE_NETWORK; do
+            bind_pciback_service="{{ bind_pciback_device_service('$dev') }}"
+            unbind_device_service="{{ unbind_pci_device_service('$dev') }}"
+            unbind_override_path="/usr/lib/systemd/system/$unbind_device_service.d"
+            pciback_override_path="/usr/lib/systemd/system/$bind_pciback_service.d"
+            echo "Creating overrides '$unbind_override_path' and '$pciback_override_path'"
+            mkdir -p -- "$unbind_override_path" "$pciback_override_path"
+            cat > "$unbind_override_path/unbind_network_early.conf" <<EOF
+            [Unit]
+            BindsTo=
+            After=
+            Conflicts=
+            Before=network-pre.target
+            Conflicts=network-pre.target
+            [Service]
+            ExecStartPost=-systemctl --no-block -- stop "$unbind_device_service"
+        EOF
+            cat > "$pciback_override_path/rebind_network_early.conf" <<EOF
+            [Unit]
+            StopWhenUnneeded=yes
+            Requires=
+            After=
+            BindsTo=
+            BindsTo=$unbind_device_service
+            Before=$unbind_device_service
+            Conflicts=
+        EOF
+        done
+        systemctl daemon-reload
+        for dev in $HIDE_NETWORK $HIDE_USB; do
+            pciback_service="{{ bind_pciback_device_service('$dev') }}"
+            echo "Starting $pciback_service"
+            systemctl --quiet -- enable "$pciback_service"
+            systemctl --no-block -- start "$pciback_service"
+        done
         if getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
             getargbool 1 usbcore.authorized_default || exit
             getargbool 0 rd.qubes.hide_all_usb && exit
@@ -244,12 +339,14 @@
     - file: {{p}}{{ mod_dir }}/{{ usbguard_rule_filename }}
     - file: {{p}}{{ mod_dir }}/{{ hook_script_name }}
     - file: {{p}}{{ mod_dir }}/{{ start_usbguard_script_name }}
-    - file: {{p}}{{ unbind_usb_devices_service_path }}
+    - file: {{p}}{{ unbind_pci_device_service_path }}
+    - file: {{p}}{{ unbind_pci_devices_service_path }}
+    - file: {{p}}{{ bind_pciback_device_service_path }}
     - file: {{p}}{{ usbguard_override }}
   {% endcall %}
 
   {% call add_dependencies('daemon-reload') %}
-    {% for file in [usbguard_override, unbind_usb_devices_service_path] %}
+    {% for file in [usbguard_override, unbind_pci_devices_service_path, unbind_pci_device_service_path, bind_pciback_device_service_path] %}
     - file: {{p}}{{ file }}
     {% endfor %}
   {% endcall %}
