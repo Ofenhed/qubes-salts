@@ -274,7 +274,6 @@
             unbind_device_service="{{ unbind_pci_device_service('$dev') }}"
             unbind_override_path="/usr/lib/systemd/system/$unbind_device_service.d"
             pciback_override_path="/usr/lib/systemd/system/$bind_pciback_service.d"
-            echo "Creating overrides '$unbind_override_path' and '$pciback_override_path'"
             mkdir -p -- "$unbind_override_path" "$pciback_override_path"
             cat > "$unbind_override_path/unbind_network_early.conf" <<EOF
             [Unit]
