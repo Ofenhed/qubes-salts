@@ -16,6 +16,5 @@
          #!/bin/sh
          # {{ salt_warning }}
 
-         rm -f /etc/sudoers.d/qubes
-         rm -f /etc/polkit-1/rules.d/00-qubes-allow-all.rules
+         dnf remove --noautoremove -y qubes-core-agent-passwordless-root
 {% endif %}
