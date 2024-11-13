@@ -4,7 +4,7 @@
 # loads either this module or fido2, as such:
 # add_dracutmodules+=" hide-all-usb-after-decrypt "
 
-{% from "formatting.jinja" import systemd_inline_bash, salt_warning %}
+{% from "formatting.jinja" import escape_bash, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Hide USB after decrypt" %}
@@ -129,7 +129,7 @@
 
         TimeoutSec=3min
         ExecStop=bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
                 echo "Detected system shutdown, skipping USB unbind"
                 exit 1
@@ -178,7 +178,7 @@
 
         TimeoutSec=3min
         ExecStop=bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             systemctl disable --quiet usbguard.service
             systemctl stop usbguard.service
         {%- endcall %}
@@ -216,7 +216,7 @@
 
         TimeoutSec=3min
         ExecStop=bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
                 echo "Detected system shutdown, skipping USB unbind"
                 exit 1

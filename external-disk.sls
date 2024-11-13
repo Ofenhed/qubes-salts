@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import systemd_inline_bash, salt_warning %}
+{% from "formatting.jinja" import escape_bash, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "External disk generator " %}
@@ -53,7 +53,7 @@
         Type=oneshot
         RemainAfterExit=yes
         ExecStart=/bin/bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             {% for var in ['device_description',
                            'luks_name',
                            'logical_volume_name'] %}
@@ -129,7 +129,7 @@
         {%- endcall %}
 
         ExecStartPost=-/bin/bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             for attempt in {1..20} ; do
               if lvs -o vg_name | grep -qP '^\s*'"$logical_volume_name"'\s*$' ; then
                 exit 0
@@ -166,12 +166,12 @@
         TimeoutStopSec=3m
 
         ExecStop=/bin/bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
           {{ shutdown_vms(false) }}
         {%- endcall %}
 
         ExecStopPost=/bin/bash -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
             {{ shutdown_vms(true) }}
 
             luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$') ;

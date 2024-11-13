@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import salt_warning, systemd_inline_bash %}
+{% from "formatting.jinja" import salt_warning, escape_bash %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Systemd ask password caps indicator " %}
@@ -93,7 +93,7 @@
         [Service]
         Type=simple
         ExecStart=sh -c
-        {%- call systemd_inline_bash() %}
+        {%- call escape_bash() %}
         while true ; do
             if [[ $(systemctl list-units -q --state=activating 'systemd-cryptsetup@*.service' | wc -l) -eq 0 ]]; then
                 sleep 0.5

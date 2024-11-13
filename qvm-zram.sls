@@ -9,12 +9,13 @@
 
 {% set bin_path = '/usr/bin' if in_template else '/usr/local/bin' %}
 
+  {%- if in_template or salt['pillar.get']('zram', None) != None %}
 {{ bin_path }}/zram_start:
   file.managed:
     - user: root
     - group: root
     - mode: 555
-    - replace: {{ "true" if in_template else "false" }}
+    - replace: true
     - contents: |
         #!/usr/bin/env bash
         # Create a swap device in RAM with the 'zram' kernel module. Copy this file to /usr/local/bin.
@@ -57,6 +58,7 @@
         
         sleep 1
         modprobe -r zram
+  {% endif %}
 
   {% if in_template %}
 
