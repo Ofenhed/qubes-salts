@@ -7,7 +7,7 @@
 {% from "formatting.jinja" import escape_bash, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
-{% set p = "Hide USB after decrypt" %}
+{% set p = "Hide USB after decrypt " %}
 
 {% set module_name = "hide-all-usb-after-decrypt" %}
 {% set mod_dir = "/lib/dracut/modules.d/92" + module_name %}
@@ -20,6 +20,11 @@
 {% set unbind_pci_devices_service = 'unbind-pci-devices.service' %}
 {% set unbind_pci_device_service_path = "/usr/lib/systemd/system/" + unbind_pci_device_service() %}
 {% set bind_pciback_device_service_path = "/usr/lib/systemd/system/" + bind_pciback_device_service() %}
+{% set network_override_filename = "rebind-network-early.conf" %}
+{% set unbind_pci_device_service_network_override_dir = "/usr/lib/systemd/system/" + unbind_pci_device_service('network') + ".d" %}
+{% set unbind_pci_device_service_network_override_path = unbind_pci_device_service_network_override_dir + "/" + network_override_filename %}
+{% set bind_pciback_device_service_network_override_dir = "/usr/lib/systemd/system/" + bind_pciback_device_service('network') + ".d" %}
+{% set bind_pciback_device_service_network_override_path = bind_pciback_device_service_network_override_dir + "/" + network_override_filename %}
 {% set unbind_pci_devices_service_path = "/usr/lib/systemd/system/" + unbind_pci_devices_service %}
 {% set usbguard_override = "/usr/lib/systemd/system/usbguard.service.d/hide-all-usb-after-decrypt.conf" %}
 {% set usbguard_rule_filename = "50-cryptsetup-devices.conf" %}
@@ -74,7 +79,7 @@
             {% if (usbguard_rules | length) > 0 %}
             inst "$moddir/{{ usbguard_rule_filename }}" "/etc/usbguard/rules.d/{{ usbguard_rule_filename }}"
             {% endif %}
-            inst_multiple {{ usbguard_override }} {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }}
+            inst_multiple {{ usbguard_override }} {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }} {{ unbind_pci_device_service_network_override_path }} {{ bind_pciback_device_service_network_override_path }}
             if ! dracut_module_included "qubes-pciback"; then
                 mkdir -p -m 0700 -- "$initdir/etc/usbguard"
                 mkdir -p -m 0755 -- "$systemdsystemunitdir/usbguard.service.d"
@@ -127,7 +132,6 @@
 
         RemainAfterExit=yes
 
-        TimeoutSec=3min
         ExecStop=bash -c
         {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
@@ -176,15 +180,35 @@
 
         RemainAfterExit=yes
 
-        TimeoutSec=3min
         ExecStop=bash -c
         {%- call escape_bash() %}
-            systemctl disable --quiet usbguard.service
-            systemctl stop usbguard.service
+            systemctl --quiet --now -- disable usbguard.service
         {%- endcall %}
 
         [Install]
         WantedBy=basic.target
+
+{{p}}{{ unbind_pci_device_service_network_override_path }}:
+  file.managed:
+    - name: {{ unbind_pci_device_service_network_override_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - makedirs: true
+    - dirmode: 555
+    - replace: true
+    - require:
+      - file: {{p}}{{ mod_dir }}
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        BindsTo=
+        After=
+        Conflicts=
+        Before=network-pre.target
+        Conflicts=network-pre.target
+        [Service]
+        ExecStartPost=-systemctl --no-block -- stop "{{ unbind_pci_device_service('%i') }}"
 
 {{p}}{{ bind_pciback_device_service_path }}:
   file.managed:
@@ -214,7 +238,6 @@
 
         RemainAfterExit=yes
 
-        TimeoutSec=3min
         ExecStop=bash -c
         {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
@@ -229,6 +252,28 @@
 
         [Install]
         WantedBy=basic.target
+
+{{p}}{{ bind_pciback_device_service_network_override_path }}:
+  file.managed:
+    - name: {{ bind_pciback_device_service_network_override_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - makedirs: true
+    - dirmode: 555
+    - replace: true
+    - require:
+      - file: {{p}}{{ mod_dir }}
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        StopWhenUnneeded=yes
+        Requires=
+        After=
+        BindsTo=
+        BindsTo={{ unbind_pci_device_service('%i') }}
+        Before={{ unbind_pci_device_service('%i') }}
+        Conflicts=
 
 {{p}}{{ usbguard_override }}:
   file.managed:
@@ -259,8 +304,7 @@
         {% if script == start_usbguard_script_name %}
         if ! getargbool 1 usbcore.authorized_default; then
             info "Restricting USB in dom0 via usbguard."
-            systemctl --quiet -- enable usbguard.service
-            systemctl --no-block start usbguard.service
+            systemctl --quiet --no-block --now -- enable usbguard.service
         fi
         {% endif %}
         HIDE_NETWORK=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"02/ {print \$1}";}) ||
@@ -274,34 +318,15 @@
             unbind_device_service="{{ unbind_pci_device_service('$dev') }}"
             unbind_override_path="/usr/lib/systemd/system/$unbind_device_service.d"
             pciback_override_path="/usr/lib/systemd/system/$bind_pciback_service.d"
-            mkdir -p -- "$unbind_override_path" "$pciback_override_path"
-            cat > "$unbind_override_path/unbind_network_early.conf" <<EOF
-            [Unit]
-            BindsTo=
-            After=
-            Conflicts=
-            Before=network-pre.target
-            Conflicts=network-pre.target
-            [Service]
-            ExecStartPost=-systemctl --no-block -- stop "$unbind_device_service"
-        EOF
-            cat > "$pciback_override_path/rebind_network_early.conf" <<EOF
-            [Unit]
-            StopWhenUnneeded=yes
-            Requires=
-            After=
-            BindsTo=
-            BindsTo=$unbind_device_service
-            Before=$unbind_device_service
-            Conflicts=
-        EOF
+            mkdir -p "$unbind_override_path" "$pciback_override_path"
+            ln -s "{{ unbind_pci_device_service_network_override_path }}" "$unbind_override_path/{{ network_override_filename }}"
+            ln -s "{{ bind_pciback_device_service_network_override_path }}" "$pciback_override_path/{{ network_override_filename }}"
         done
         systemctl daemon-reload
         for dev in $HIDE_NETWORK $HIDE_USB; do
             pciback_service="{{ bind_pciback_device_service('$dev') }}"
             echo "Starting $pciback_service"
-            systemctl --quiet -- enable "$pciback_service"
-            systemctl --no-block -- start "$pciback_service"
+            systemctl --quiet --no-block --now -- enable "$pciback_service"
         done
         if getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
             getargbool 1 usbcore.authorized_default || exit
