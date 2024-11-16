@@ -26,11 +26,16 @@
 {% set bind_pciback_device_service_network_override_dir = "/usr/lib/systemd/system/" + bind_pciback_device_service('network') + ".d" %}
 {% set bind_pciback_device_service_network_override_path = bind_pciback_device_service_network_override_dir + "/" + network_override_filename %}
 {% set unbind_pci_devices_service_path = "/usr/lib/systemd/system/" + unbind_pci_devices_service %}
-{% set usbguard_override = "/usr/lib/systemd/system/usbguard.service.d/hide-all-usb-after-decrypt.conf" %}
-{% set usbguard_rule_filename = "50-cryptsetup-devices.conf" %}
 {% set hook_script_name = "check-hide-all-usb-options.sh" %}
-{% set start_usbguard_script_name = "start_usbguard_if_no_qubes_pciback.sh" %}
-{% set usbguard_rules = salt['pillar.get']('cryptsetup-devices', ['allow 1050:* with-interface match-all { 03:00:00 03:01:01 0b:00:00 }']) %}
+{% set authorized_decrypt_usb = salt['pillar.get']('hide-all-usb-after-decrypt:udev:authorized', [
+  {'SUBSYSTEM': 'hid', 'ATTR{idVendor}': '1050'},
+  {'SUBSYSTEM': 'usb', 'ATTR{idVendor}': '1050'},
+  {'SUBSYSTEM': 'usb', 'ATTR{bDeviceClass}': '09', 'ATTR{bDeviceSubClass}': '00', 'ATTR{bDeviceProtocol}': '00'},
+  {'SUBSYSTEM': 'usb', 'ATTR{bDeviceClass}': '09', 'ATTR{bDeviceSubClass}': '00', 'ATTR{bDeviceProtocol}': '01'},
+  {'SUBSYSTEM': 'usb', 'ATTR{bDeviceClass}': '09', 'ATTR{bDeviceSubClass}': '00', 'ATTR{bDeviceProtocol}': '02'},
+  {'SUBSYSTEM': 'usb', 'ATTR{bDeviceClass}': '09', 'ATTR{bDeviceSubClass}': '00', 'ATTR{bDeviceProtocol}': '03'},
+  ]) %}
+{% set authorized_decrypt_usb_filename = '20-authorized-decrypt.rules' %}
 
 
 {% if grains['id'] == 'dom0' %}
@@ -76,24 +81,10 @@
         # Install the required file(s) and directories for the module in the initramfs.
         install() {
             inst_multiple lspci awk bash true
-            {% if (usbguard_rules | length) > 0 %}
-            inst "$moddir/{{ usbguard_rule_filename }}" "/etc/usbguard/rules.d/{{ usbguard_rule_filename }}"
-            {% endif %}
-            inst_multiple {{ usbguard_override }} {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }} {{ unbind_pci_device_service_network_override_path }} {{ bind_pciback_device_service_network_override_path }}
-            if ! dracut_module_included "qubes-pciback"; then
-                mkdir -p -m 0700 -- "$initdir/etc/usbguard"
-                mkdir -p -m 0755 -- "$systemdsystemunitdir/usbguard.service.d"
-                inst_multiple /etc/nsswitch.conf
-                inst_multiple /etc/usbguard/{qubes-usbguard.conf,rules.d,IPCAccessControl.d}
-                inst_multiple /etc/usbguard/rules.d/*
-                inst -l /usr/bin/usbguard
-                inst -l /usr/sbin/usbguard-daemon
-                inst /usr/lib/systemd/system/usbguard.service.d/30_qubes.conf
-                inst /usr/lib/systemd/system/usbguard.service
-                inst_hook cmdline 02 "$moddir/{{ start_usbguard_script_name }}"
-            else
-                inst_hook cmdline 05 "$moddir/{{ hook_script_name }}"
-            fi
+            inst_multiple {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }} {{ unbind_pci_device_service_network_override_path }} {{ bind_pciback_device_service_network_override_path }}
+            inst "$moddir/{{ authorized_decrypt_usb_filename }}" "/usr/lib/udev/rules.d/{{ authorized_decrypt_usb_filename }}"
+            inst_hook cmdline 05 "$moddir/{{ hook_script_name }}"
+            $SYSTEMCTL -q --root "$initdir" mask usbguard.service
         }
 
         installkernel() {
@@ -180,10 +171,7 @@
 
         RemainAfterExit=yes
 
-        ExecStop=bash -c
-        {%- call escape_bash() %}
-            systemctl --quiet --now -- disable usbguard.service
-        {%- endcall %}
+        ExecStart="true"
 
         [Install]
         WantedBy=basic.target
@@ -275,22 +263,9 @@
         Before={{ unbind_pci_device_service('%i') }}
         Conflicts=
 
-{{p}}{{ usbguard_override }}:
+{{p}}{{ hook_script_name }}:
   file.managed:
-    - name: {{ usbguard_override }}
-    - user: root
-    - group: root
-    - mode: 444
-    - replace: true
-    - contents: |
-        # {{ salt_warning }}
-        [Service]
-        ExecCondition=/bin/sh -c '! systemctl is-active {{ unbind_pci_devices_service }}'
-
-{% for script in [hook_script_name, start_usbguard_script_name] %}
-{{p}}{{ mod_dir }}/{{ script }}:
-  file.managed:
-    - name: {{ mod_dir }}/{{ script }}
+    - name: {{ mod_dir }}/{{ hook_script_name }}
     - user: root
     - group: root
     - mode: 555
@@ -301,12 +276,6 @@
         #!/usr/bin/bash --
         # {{ salt_warning }}
         type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
-        {% if script == start_usbguard_script_name %}
-        if ! getargbool 1 usbcore.authorized_default; then
-            info "Restricting USB in dom0 via usbguard."
-            systemctl --quiet --no-block --now -- enable usbguard.service
-        fi
-        {% endif %}
         HIDE_NETWORK=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"02/ {print \$1}";}) ||
             die 'Cannot obtain list of PCI devices to unbind.'
         HIDE_USB=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"0c03/ {print \$1}";}) ||
@@ -328,20 +297,18 @@
             echo "Starting $pciback_service"
             systemctl --quiet --no-block --now -- enable "$pciback_service"
         done
+        getargbool 0 rd.qubes.hide_all_usb && exit
+
         if getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
             getargbool 1 usbcore.authorized_default || exit
-            getargbool 0 rd.qubes.hide_all_usb && exit
-            warn 'USB in dom0 is not restricted during boot with only rd.qubes.hide_all_usb_after_decrypt. Consider adding usbcore.authorized_default=0 or rd.qubes.hide_all_usb in combination with rd.qubes.dom0_usb.'
+            warn 'USB in dom0 is not restricted during boot with only rd.qubes.hide_all_usb_after_decrypt. Consider adding usbcore.authorized_default=0 to the command line.'
+        else
+            warn 'USB in dom0 is not restricted. Consider adding rd.qubes.hide_all_usb_after_decrypt and usbcore.authorized_default=0.'
         fi
-{% endfor %}
 
-{{p}}{{ mod_dir }}/{{ usbguard_rule_filename }}:
-  {% if (usbguard_rules | length) == 0 %}
-  file.absent:
-    - name: {{ mod_dir }}/{{ usbguard_rule_filename }}
-  {% else %}
+{{p}}{{ authorized_decrypt_usb_filename }}:
   file.managed:
-    - name: {{ mod_dir }}/{{ usbguard_rule_filename }}
+    - name: {{ mod_dir }}/{{ authorized_decrypt_usb_filename }}
     - user: root
     - group: root
     - mode: 444
@@ -349,28 +316,28 @@
     - require:
       - file: {{p}}{{ mod_dir }}
     - contents: |
-        ## {{ salt_warning }}
-
-        {% filter indent(8) %}
-        {%- for rule in usbguard_rules -%}
-        {{ rule + "\n" }}
+        ACTION!="add", GOTO="authorized_end"
+        {% for rule in authorized_decrypt_usb %}
+        {{ "" }}
+          {%- for (key, value) in rule.items() -%}
+            {{key}}=="{{ value }}",
+          {%- endfor -%}
+          ATTR{authorized}="1", GOTO="authorized_end"
         {%- endfor %}
-        {%- endfilter %}
-  {%- endif %}
+
+        LABEL="authorized_end"
 
   {% call add_dependencies('dracut') %}
     - file: {{p}}setup
-    - file: {{p}}{{ mod_dir }}/{{ usbguard_rule_filename }}
-    - file: {{p}}{{ mod_dir }}/{{ hook_script_name }}
-    - file: {{p}}{{ mod_dir }}/{{ start_usbguard_script_name }}
+    - file: {{p}}{{ hook_script_name }}
+    - file: {{p}}{{ authorized_decrypt_usb_filename }}
     - file: {{p}}{{ unbind_pci_device_service_path }}
     - file: {{p}}{{ unbind_pci_devices_service_path }}
     - file: {{p}}{{ bind_pciback_device_service_path }}
-    - file: {{p}}{{ usbguard_override }}
   {% endcall %}
 
   {% call add_dependencies('daemon-reload') %}
-    {% for file in [usbguard_override, unbind_pci_devices_service_path, unbind_pci_device_service_path, bind_pciback_device_service_path] %}
+    {% for file in [unbind_pci_devices_service_path, unbind_pci_device_service_path, bind_pciback_device_service_path] %}
     - file: {{p}}{{ file }}
     {% endfor %}
   {% endcall %}
