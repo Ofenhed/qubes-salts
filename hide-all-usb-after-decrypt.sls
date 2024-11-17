@@ -26,7 +26,7 @@
 {% set bind_pciback_device_service_network_override_dir = "/usr/lib/systemd/system/" + bind_pciback_device_service('network') + ".d" %}
 {% set bind_pciback_device_service_network_override_path = bind_pciback_device_service_network_override_dir + "/" + network_override_filename %}
 {% set unbind_pci_devices_service_path = "/usr/lib/systemd/system/" + unbind_pci_devices_service %}
-{% set hook_script_name = "check-hide-all-usb-options.sh" %}
+{% set hook_script_name = "qubes-pciback.sh" %}
 {% set authorized_decrypt_usb = salt['pillar.get']('hide-all-usb-after-decrypt:udev:authorized', [
   {'SUBSYSTEM': 'hid', 'ATTR{idVendor}': '1050'},
   {'SUBSYSTEM': 'usb', 'ATTR{idVendor}': '1050'},
@@ -80,10 +80,15 @@
 
         # Install the required file(s) and directories for the module in the initramfs.
         install() {
-            inst_multiple lspci awk bash true
+            if dracut_module_included "qubes-pciback"; then
+                derror "hide-all-usb-after-decrypt conflicts with qubes-pciback"
+                return 1
+            fi
+
+            inst_multiple lspci awk bash true touch
             inst_multiple {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }} {{ unbind_pci_device_service_network_override_path }} {{ bind_pciback_device_service_network_override_path }}
             inst "$moddir/{{ authorized_decrypt_usb_filename }}" "/usr/lib/udev/rules.d/{{ authorized_decrypt_usb_filename }}"
-            inst_hook cmdline 05 "$moddir/{{ hook_script_name }}"
+            inst_hook cmdline 02 "$moddir/{{ hook_script_name }}"
             $SYSTEMCTL -q --root "$initdir" mask usbguard.service
         }
 
@@ -117,13 +122,15 @@
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
         ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
         ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
+        ConditionPathIsDirectory=!/sys/bus/pci/drivers/pciback/0000:%i
 
         [Service]
         Type=oneshot
 
         RemainAfterExit=yes
 
-        ExecStop=bash -c
+        ExecStart="true"
+        ExecStopPost=bash -c
         {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
                 echo "Detected system shutdown, skipping USB unbind"
@@ -147,7 +154,7 @@
         {%- endcall %}
 
         [Install]
-        WantedBy=basic.target
+        WantedBy=systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service
 
 {{p}}{{ unbind_pci_devices_service_path }}:
   file.managed:
@@ -164,6 +171,7 @@
         Description=Unbind PCI devices
         Before=cryptsetup.target
         Conflicts=cryptsetup.target
+        RefuseManualStop=yes
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
 
         [Service]
@@ -190,11 +198,7 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        BindsTo=
-        After=
-        Conflicts=
-        Before=network-pre.target
-        Conflicts=network-pre.target
+        Description=Unbind %i on boot
         [Service]
         ExecStartPost=-systemctl --no-block -- stop "{{ unbind_pci_device_service('%i') }}"
 
@@ -212,7 +216,8 @@
         [Unit]
         Description=Bind %i to pciback after disk decryption
         After=basic.target
-        Requires={{ unbind_pci_device_service('%i') }}
+        Before={{ unbind_pci_device_service('%i') }}
+        BindsTo={{ unbind_pci_device_service('%i') }}
         Before={{ unbind_pci_devices_service }}
         BindsTo={{ unbind_pci_devices_service }}
         Before=cryptsetup.target
@@ -220,13 +225,15 @@
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
         ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
         ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
+        ConditionPathIsDirectory=!/sys/bus/pci/drivers/pciback/0000:%i
 
         [Service]
         Type=oneshot
 
         RemainAfterExit=yes
 
-        ExecStop=bash -c
+        ExecStart="true"
+        ExecStopPost=bash -c
         {%- call escape_bash() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
                 echo "Detected system shutdown, skipping USB unbind"
@@ -239,7 +246,7 @@
         {%- endcall %}
 
         [Install]
-        WantedBy=basic.target
+        WantedBy=systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service
 
 {{p}}{{ bind_pciback_device_service_network_override_path }}:
   file.managed:
@@ -255,13 +262,7 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        StopWhenUnneeded=yes
-        Requires=
-        After=
-        BindsTo=
-        BindsTo={{ unbind_pci_device_service('%i') }}
-        Before={{ unbind_pci_device_service('%i') }}
-        Conflicts=
+        Description=Bind %i to pciback on boot
 
 {{p}}{{ hook_script_name }}:
   file.managed:
@@ -334,6 +335,8 @@
     - file: {{p}}{{ unbind_pci_device_service_path }}
     - file: {{p}}{{ unbind_pci_devices_service_path }}
     - file: {{p}}{{ bind_pciback_device_service_path }}
+    - file: {{p}}{{ bind_pciback_device_service_network_override_path }}
+    - file: {{p}}{{ unbind_pci_device_service_network_override_path }}
   {% endcall %}
 
   {% call add_dependencies('daemon-reload') %}
