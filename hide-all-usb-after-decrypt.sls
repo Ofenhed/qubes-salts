@@ -21,10 +21,7 @@
 {% set unbind_pci_device_service_path = "/usr/lib/systemd/system/" + unbind_pci_device_service() %}
 {% set bind_pciback_device_service_path = "/usr/lib/systemd/system/" + bind_pciback_device_service() %}
 {% set network_override_filename = "rebind-network-early.conf" %}
-{% set unbind_pci_device_service_network_override_dir = "/usr/lib/systemd/system/" + unbind_pci_device_service('network') + ".d" %}
-{% set unbind_pci_device_service_network_override_path = unbind_pci_device_service_network_override_dir + "/" + network_override_filename %}
-{% set bind_pciback_device_service_network_override_dir = "/usr/lib/systemd/system/" + bind_pciback_device_service('network') + ".d" %}
-{% set bind_pciback_device_service_network_override_path = bind_pciback_device_service_network_override_dir + "/" + network_override_filename %}
+{% set usb_override_filename = "unbind-all-usb-before-first-pciback-bind.conf" %}
 {% set unbind_pci_devices_service_path = "/usr/lib/systemd/system/" + unbind_pci_devices_service %}
 {% set hook_script_name = "qubes-pciback.sh" %}
 {% set authorized_decrypt_usb = salt['pillar.get']('hide-all-usb-after-decrypt:udev:authorized', [
@@ -86,10 +83,11 @@
             fi
 
             inst_multiple lspci awk bash true touch
-            inst_multiple {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }} {{ unbind_pci_device_service_network_override_path }} {{ bind_pciback_device_service_network_override_path }}
+            inst_multiple {{ unbind_pci_devices_service_path }} {{ unbind_pci_device_service_path }} {{ bind_pciback_device_service_path }}
             inst "$moddir/{{ authorized_decrypt_usb_filename }}" "/usr/lib/udev/rules.d/{{ authorized_decrypt_usb_filename }}"
             inst_hook cmdline 02 "$moddir/{{ hook_script_name }}"
             $SYSTEMCTL -q --root "$initdir" mask usbguard.service
+            $SYSTEMCTL -q --root "$initdir" enable {{ unbind_pci_devices_service }}
         }
 
         installkernel() {
@@ -117,8 +115,6 @@
         # {{ salt_warning }}
         [Unit]
         Description=Unbind %i after disk decryption
-        After={{ unbind_pci_devices_service }}
-        BindsTo={{ unbind_pci_devices_service }}
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
         ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
         ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
@@ -139,17 +135,22 @@
             set -e
 
             BDF="0000:%i"
-            if [ -e "/sys/bus/pci/drivers/pciback/$BDF" ]; then
-                echo "Device $dev already unbound, skipping"
-                continue
-            fi
-            if [ -e "/sys/bus/pci/devices/$BDF/driver" ]; then
-                echo "Unbinding $dev"
-                echo -n "$BDF" > "/sys/bus/pci/devices/$BDF/driver/unbind"
-            fi
             if [ -e "/sys/bus/pci/devices/$BDF/driver_override" ]; then
                 echo "Setting driver override for %i"
                 echo -n pciback > "/sys/bus/pci/devices/$BDF/driver_override"
+            else
+                echo "Could not set driver override for %i" >&2
+                exit 1
+            fi
+            if [ -e "/sys/bus/pci/devices/$BDF/driver" ]; then
+                if [ -e "/sys/bus/pci/drivers/pciback/$BDF" ]; then
+                    echo "Device %i bound to pciback without intervention"
+                else
+                    echo "Unbinding $dev"
+                    echo -n "$BDF" > "/sys/bus/pci/devices/$BDF/driver/unbind"
+                fi
+            else
+                echo "Device %i is not bound by a driver" >&2
             fi
         {%- endcall %}
 
@@ -172,6 +173,7 @@
         Before=cryptsetup.target
         Conflicts=cryptsetup.target
         RefuseManualStop=yes
+        RefuseManualStart=yes
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
 
         [Service]
@@ -183,24 +185,6 @@
 
         [Install]
         WantedBy=basic.target
-
-{{p}}{{ unbind_pci_device_service_network_override_path }}:
-  file.managed:
-    - name: {{ unbind_pci_device_service_network_override_path }}
-    - user: root
-    - group: root
-    - mode: 444
-    - makedirs: true
-    - dirmode: 555
-    - replace: true
-    - require:
-      - file: {{p}}{{ mod_dir }}
-    - contents: |
-        # {{ salt_warning }}
-        [Unit]
-        Description=Unbind %i on boot
-        [Service]
-        ExecStartPost=-systemctl --no-block -- stop "{{ unbind_pci_device_service('%i') }}"
 
 {{p}}{{ bind_pciback_device_service_path }}:
   file.managed:
@@ -218,10 +202,6 @@
         After=basic.target
         Before={{ unbind_pci_device_service('%i') }}
         BindsTo={{ unbind_pci_device_service('%i') }}
-        Before={{ unbind_pci_devices_service }}
-        BindsTo={{ unbind_pci_devices_service }}
-        Before=cryptsetup.target
-        Conflicts=cryptsetup.target
         ConditionKernelCommandLine=rd.qubes.hide_all_usb_after_decrypt
         ConditionKernelCommandLine=!rd.qubes.keep_pci_after_decrypt=%i
         ConditionPathIsDirectory=/sys/bus/pci/devices/0000:%i
@@ -248,22 +228,6 @@
         [Install]
         WantedBy=systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service
 
-{{p}}{{ bind_pciback_device_service_network_override_path }}:
-  file.managed:
-    - name: {{ bind_pciback_device_service_network_override_path }}
-    - user: root
-    - group: root
-    - mode: 444
-    - makedirs: true
-    - dirmode: 555
-    - replace: true
-    - require:
-      - file: {{p}}{{ mod_dir }}
-    - contents: |
-        # {{ salt_warning }}
-        [Unit]
-        Description=Bind %i to pciback on boot
-
 {{p}}{{ hook_script_name }}:
   file.managed:
     - name: {{ mod_dir }}/{{ hook_script_name }}
@@ -289,8 +253,33 @@
             unbind_override_path="/usr/lib/systemd/system/$unbind_device_service.d"
             pciback_override_path="/usr/lib/systemd/system/$bind_pciback_service.d"
             mkdir -p "$unbind_override_path" "$pciback_override_path"
-            ln -s "{{ unbind_pci_device_service_network_override_path }}" "$unbind_override_path/{{ network_override_filename }}"
-            ln -s "{{ bind_pciback_device_service_network_override_path }}" "$pciback_override_path/{{ network_override_filename }}"
+            cat > "$unbind_override_path/{{ network_override_filename }}" <<EOF
+            [Unit]
+            Description=Unbind %i on boot
+            [Service]
+            ExecStartPost=-systemctl --no-block -- stop "{{ unbind_pci_device_service('%i') }}"
+        EOF
+            cat > "$pciback_override_path/{{ network_override_filename }}" <<EOF
+            [Unit]
+            Description=Bind %i to pciback on boot
+        EOF
+        done
+        for dev in $HIDE_USB; do
+            bind_pciback_service="{{ bind_pciback_device_service('$dev') }}"
+            unbind_device_service="{{ unbind_pci_device_service('$dev') }}"
+            unbind_override_path="/usr/lib/systemd/system/$unbind_device_service.d"
+            pciback_override_path="/usr/lib/systemd/system/$bind_pciback_service.d"
+            mkdir -p "$unbind_override_path" "$pciback_override_path"
+            cat > "$unbind_override_path/{{ usb_override_filename }}" <<EOF
+            [Unit]
+            After={{ unbind_pci_devices_service }}
+            BindsTo={{ unbind_pci_devices_service }}
+        EOF
+            cat > "$pciback_override_path/{{ usb_override_filename }}" <<EOF
+            [Unit]
+            Before={{ unbind_pci_devices_service }}
+            BindsTo={{ unbind_pci_devices_service }}
+        EOF
         done
         systemctl daemon-reload
         for dev in $HIDE_NETWORK $HIDE_USB; do
@@ -335,8 +324,6 @@
     - file: {{p}}{{ unbind_pci_device_service_path }}
     - file: {{p}}{{ unbind_pci_devices_service_path }}
     - file: {{p}}{{ bind_pciback_device_service_path }}
-    - file: {{p}}{{ bind_pciback_device_service_network_override_path }}
-    - file: {{p}}{{ unbind_pci_device_service_network_override_path }}
   {% endcall %}
 
   {% call add_dependencies('daemon-reload') %}
