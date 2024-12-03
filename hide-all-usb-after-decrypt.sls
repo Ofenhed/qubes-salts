@@ -4,7 +4,7 @@
 # loads either this module or fido2, as such:
 # add_dracutmodules+=" hide-all-usb-after-decrypt "
 
-{% from "formatting.jinja" import escape_bash, salt_warning %}
+{% from "formatting.jinja" import systemd_shell, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Hide USB after decrypt " %}
@@ -141,8 +141,7 @@
         {% if service_path == hide_all_network_service_path %}
         ExecStartPost=-systemctl --no-block -- stop "{{ hide_all_network_service_name }}"
         {% endif %}
-        ExecStopPost=bash -c
-        {%- call escape_bash() %}
+        ExecStopPost={%- call systemd_shell() %}
             if [[ "$(systemctl is-system-running || true)" == "stopping" ]]; then
                 echo "Detected system shutdown, skipping USB unbind"
                 exit 1

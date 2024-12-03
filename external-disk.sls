@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import escape_bash, salt_warning %}
+{% from "formatting.jinja" import systemd_shell, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "External disk generator " %}
@@ -52,8 +52,7 @@
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/bin/bash -c
-        {%- call escape_bash() %}
+        ExecStart={% call systemd_shell() %}
             {% for var in ['device_description',
                            'luks_name',
                            'logical_volume_name'] %}
@@ -128,8 +127,7 @@
             fi
         {%- endcall %}
 
-        ExecStartPost=-/bin/bash -c
-        {%- call escape_bash() %}
+        ExecStartPost=-{%- call systemd_shell() %}
             for attempt in {1..20} ; do
               if lvs -o vg_name | grep -qP '^\s*'"$logical_volume_name"'\s*$' ; then
                 exit 0
@@ -165,18 +163,16 @@
 
         TimeoutStopSec=3m
 
-        ExecStop=/bin/bash -c
-        {%- call escape_bash() %}
+        ExecStop={%- call systemd_shell() %}
           {{ shutdown_vms(false) }}
         {%- endcall %}
 
-        ExecStopPost=/bin/bash -c
-        {%- call escape_bash() %}
+        ExecStopPost={%- call systemd_shell() %}
             {{ shutdown_vms(true) }}
 
-            luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$') ;
-            local_device=$(cryptsetup status "$luks_name" | grep -Po '(?<=device:)\s*/dev/[a-z]+$' | grep -Po '(?<=/dev/)[a-z]+$') ;
-            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po 'sys-usb:[a-z]+[0-9]*(?=\s)') ;
+            luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$')
+            local_device=$(cryptsetup status "$luks_name" | grep -Po '(?<=device:)\s*/dev/[a-z]+$' | grep -Po '(?<=/dev/)[a-z]+$')
+            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po 'sys-usb:[a-z]+[0-9]*(?=\s)')
 
             echo "Deactivating device /dev/$logical_volume_name"
             lvchange -an "/dev/$logical_volume_name" || exit 1
@@ -192,13 +188,13 @@
         WantedBy=multi-user.target
 
 
-{% for device in salt['pillar.get']('external-usb:devices', []) %}
+{% for (qvm_pool, device) in salt['pillar.get']('external-usb:devices', []).items() %}
   {% set env = {'device_description': device['device-description'],
                 'luks_name': device['luks-name'],
                 'partition_number': device['partition-number'] if 'partition-number' in device else '',
                 'logical_volume_name': device['logical-volume-name'],
                 'luks_header_path': device['luks-header-path'] if 'luks-header-path' in device else None,
-                'qvm_pool': device['qvm-pool'],
+                'qvm_pool': qvm_pool,
                 'luks_allow_discard': '1' if 'luks-allow-discard' not in device or device['luks-allow-discard'] else '0'
                 } %}
   {% set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
@@ -227,8 +223,8 @@
 {% endcall %}
 
 
-{% set blocker_py_path = "/var/cache/qube-extension-sys-usb-shutdown-blocker" %}
-{% set py_pip_name = "block_sys_usb_shutdown_for_external_usb" %}
+{% set blocker_py_path = "/var/cache/qubes-extension-sys-usb-shutdown-blocker" %}
+{% set py_pip_name = "block_sys_usb_shutdown_for_external_usb_disk" %}
 {% set py_short_package_name = "external_disk_handler" %}
 
 {{p}}{{ blocker_py_path }}/setup.py:
@@ -282,7 +278,7 @@
             """This extension blocks sys-usb from being shut down if it has active mounts"""
             @qubes.ext.handler("domain-pre-shutdown")
             async def on_domain_pre_shutdown(self, vm, event, **kwargs):
-                if vm.name == "sys-usb":
+                if vm.name == "{{ salt['pillar.get']('qvm:sys-usb:name', 'sys-usb') }}":
                     active_external_disks = await asyncio.create_subprocess_exec("/usr/bin/systemctl", "is-active", "-q", "{{ service_name }}.service")
                     if await active_external_disks.wait() == 0:
                         if not kwargs.get("force", False):
