@@ -11,6 +11,7 @@
 {% set named_service_file = '/usr/lib/systemd/system/' + service_name + '@.service' %}
 {% set watched_files = [p + named_service_file, p + super_service_file] %}
 
+{% if grains['id'] == 'dom0' %}
 {{ p }}{{ super_service_file }}:
   file.managed:
     - name: {{ super_service_file }}
@@ -137,7 +138,7 @@
             exit 1
         {%- endcall %}
 
-        {% macro shutdown_vms(kill) %}
+        {%- macro shutdown_vms(kill) %}
             while true ; do
               pool_vms_raw=$(qvm-volume list -p "$qvm_pool" | tail -n +2 | awk '{ print $2 }' | sort -u)
               readarray -t pool_vms <<< "$pool_vms_raw"
@@ -159,7 +160,7 @@
               qvm-shutdown --wait "$${running_vms[@]}"
               {% endif %}
             done
-        {% endmacro %}
+        {%- endmacro %}
 
         TimeoutStopSec=3m
 
@@ -188,7 +189,7 @@
         WantedBy=multi-user.target
 
 
-{% for (qvm_pool, device) in salt['pillar.get']('external-usb:devices', []).items() %}
+    {%- for (qvm_pool, device) in salt['pillar.get']('external-usb:devices', []).items() %}
   {% set env = {'device_description': device['device-description'],
                 'luks_name': device['luks-name'],
                 'partition_number': device['partition-number'] if 'partition-number' in device else '',
@@ -197,8 +198,8 @@
                 'qvm_pool': qvm_pool,
                 'luks_allow_discard': '1' if 'luks-allow-discard' not in device or device['luks-allow-discard'] else '0'
                 } %}
-  {% set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
-  {% do watched_files.append(override_file) %}
+    {% set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
+    {% do watched_files.append(override_file) %}
 {{ p }}{{ override_file }}:
   file.managed:
     - name: {{ override_file }}
@@ -214,18 +215,18 @@
         Environment={%- for name in env if env[name] != None -%}
           '{{ name }}={{ env[name] | replace("\\", "\\\\") | replace("'", "\\'") }}'{{ ' ' }}
         {%- endfor %}
-{% endfor %}
+  {%- endfor %}
 
-{% call add_dependencies('daemon-reload') %}
-  {% for file in watched_files %}
+  {%- call add_dependencies('daemon-reload') %}
+    {%- for file in watched_files %}
   - file: {{ file }}
-  {% endfor %}
-{% endcall %}
+    {%- endfor %}
+  {%- endcall %}
 
 
-{% set blocker_py_path = "/var/cache/qubes-extension-sys-usb-shutdown-blocker" %}
-{% set py_pip_name = "block_sys_usb_shutdown_for_external_usb_disk" %}
-{% set py_short_package_name = "external_disk_handler" %}
+  {% set blocker_py_path = "/var/cache/qubes-extension-sys-usb-shutdown-blocker" %}
+  {% set py_pip_name = "block_sys_usb_shutdown_for_external_usb_disk" %}
+  {% set py_short_package_name = "external_disk_handler" %}
 
 {{p}}{{ blocker_py_path }}/setup.py:
   file.managed:
@@ -256,7 +257,7 @@
           },
         )
 
-{% set blocker_script_path = blocker_py_path + "/src/" + py_short_package_name + "/__init__.py" %}
+  {% set blocker_script_path = blocker_py_path + "/src/" + py_short_package_name + "/__init__.py" %}
 
 {{p}}{{ blocker_script_path }}:
   file.managed:
@@ -300,3 +301,4 @@
     - onchanges:
       - file: {{p}}{{ blocker_py_path }}/setup.py
       - file: {{p}}{{ blocker_script_path }}
+{%- endif %}
