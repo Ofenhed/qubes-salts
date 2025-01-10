@@ -14,9 +14,13 @@ user:
   
 #}
 
-{% from "formatting.jinja" import yaml_escape, sha256sum %}
+{%- from "formatting.jinja" import yaml_escape, yaml_string, sha256sum, sha256sum_file %}
 
-{% set tasks = salt['pillar.get']('salt-build-targets', {}) %}
+{%- set tasks = salt['pillar.get']('salt-build-targets', {}) %}
+
+{%- macro file_state_hash_filename(filename) -%}
+  /usr/local/etc/salt/dependency-file-state-{{ sha256sum("file state: " + filename) }}
+{%- endmacro %}
 
 {%- macro task_command_filename(task) -%}
   /usr/local/etc/salt/dependency-command-{{ sha256sum("task with dependency: " + task) }}
@@ -48,4 +52,20 @@ cmd: {{ yaml_string(trigger_salt_name(task), "\"") }}
 {{ content | indent(8, first = True) }}
 
   {%- endif %}
-{%- endmacro %}
+{% endmacro %}
+
+{%- macro add_external_change_dependency(task, file) %}
+{%- set name = "External dependency for " + file + " (uid=" + sha256sum(file) + ")" %}
+{{ yaml_string(name) }}:
+  file.managed:
+    - name: {{ yaml_string(file_state_hash_filename(file)) }}
+    - user: root
+    - group: root
+    - mode: 600
+    - order: last
+    - contents: "{{ yaml_escape(file, "\"") }}: {{ sha256sum_file(file) }}"
+
+{% call add_dependencies(task) %}
+  - file: {{ yaml_string(name) }}
+  {%- endcall %}
+{% endmacro -%}

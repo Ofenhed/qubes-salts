@@ -40,6 +40,7 @@
 
   {% endfor %}
 {% else %}
+  {% from "formatting.jinja" import salt_warning %}
   {%- set vm = grains['nodename'] %}
   {%- set if_name_guess = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
   {%- set is_sysvm = (vm == 'sys-wireguard-' + if_name_guess) %}
@@ -67,7 +68,8 @@
     - makedirs: true
     - replace: true
     - contents: |
-         binds+=( '/etc/wireguard/' )
+        # {{ salt_warning }}
+        binds+=( '/etc/wireguard/' )
 
 /rw/usrlocal/lib/systemd/system/wg-resolve@.service:
   file.managed:
@@ -78,6 +80,7 @@
     - makedirs: true
     - replace: true
     - contents: |
+        # {{ salt_warning }}
         [Unit]
         Description=Add dns lookup to peer
         After=wg-quick@{{ if_name }}.service
@@ -106,6 +109,7 @@
     - dir_mode: 755
     - replace: true
     - contents: |
+        # {{ salt_warning }}
         [Service]
         Environment='wg_if_name={{ if_name }}' 'wg_peer={{ peer['public-key'] }}' 'wg_endpoint={{ peer['endpoint-name'] }}'
       {% endfor %}
@@ -119,6 +123,7 @@
     - makedirs: true
     - replace: true
     - contents: |
+        # {{ salt_warning }}
         [Unit]
         Description=Add dns lookup to peer
         After=wg-quick@{{ if_name }}.service
@@ -148,6 +153,7 @@
     - makedirs: true
     - replace: false
     - contents: |
+        # {{ salt_warning }}
         [Timer]
         OnBootSec={{ resolve_boot_delay }}
     {%- endif %}
@@ -162,6 +168,7 @@
     - replace: true
     - dir_mode: 550
     - contents: |
+        # {{ salt_warning }}
         [Interface]
         Address = {{ wg['address'] }}
         PrivateKey = {{ wg['private-key'] }}
@@ -209,11 +216,13 @@
     - replace: true
     - contents: |
          #!/usr/sbin/nft -f
+         # {{ salt_warning }}
          table inet wireguard_tunnel
          delete table inet wireguard_tunnel
          table inet wireguard_tunnel {
            chain only_forward_with_wireguard {
              type filter hook forward priority filter;
+             iifname != "{{ if_name }}" oifname != "{{ if_name }}" return
     {%- if allow_forward_to_wan %}
              # Forward traffic from the VPN
              iifname "{{ if_name }}" ct direction original counter oifgroup 1 counter accept
@@ -224,6 +233,12 @@
     {%- endif %}
              counter drop
            }
+    {%- if allow_forward_to_wan %}
+           chain nat_wan_forward {
+             type nat hook postrouting priority srcnat;
+             oifgroup 1 masquerade
+           }
+    {%- endif %}
          }
 
 /rw/config/rc.local.d/20-wireguard.rc:
@@ -235,10 +250,11 @@
     - dir_mode: 555
     - replace: true
     - contents: |
-         #!/bin/bash
-         systemctl enable --now wg-quick@{{ if_name }}.service
+        #!/bin/bash
+        # {{ salt_warning }}
+        systemctl enable --now wg-quick@{{ if_name }}.service
     {%- if peers_with_lookup|length() > 0 %}
-         systemctl enable --now wg-resolve.timer
+        systemctl enable --now wg-resolve.timer
     {%- endif %}
   {%- endif %}
 {% endif %}

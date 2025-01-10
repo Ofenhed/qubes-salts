@@ -12,6 +12,10 @@
   {{ salt['cmd.run'](["bash", "-c", 'sha256sum <<<"$sha_data" | awk "{ print \\$1 }"'], runas='nobody', env={'sha_data': task}).split(' ')[0] }}
 {%- endmacro -%}
 
+{%- macro sha256sum_file(file) -%}
+  {{ salt['cmd.run'](["bash", "-c", 'sha256sum <"$sha_file" | awk "{ print \\$1 }"'], env={'sha_file': file}).split(' ')[0] }}
+{%- endmacro -%}
+
 {%- macro yaml_escape(value, quote) -%}
   {{ (value | replace("\\", "\\\\") | replace(quote, "\\" + quote) | replace("\n", "\\n")) }}
 {%- endmacro -%}

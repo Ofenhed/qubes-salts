@@ -208,11 +208,8 @@
         systemctl daemon-reload
         # getargbool 0 rd.qubes.hide_all_usb && exit
 
-        if getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
-            getargbool 1 usbcore.authorized_default || exit
-            warn 'USB in dom0 is not restricted during boot with only rd.qubes.hide_all_usb_after_decrypt. Consider adding usbcore.authorized_default=0 to the command line.'
-        else
-            warn 'USB in dom0 is not restricted. Consider adding rd.qubes.hide_all_usb_after_decrypt and usbcore.authorized_default=0.'
+        if ! getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
+            warn 'USB in dom0 is not restricted. Consider adding rd.qubes.hide_all_usb_after_decrypt.'
         fi
 
 {{p}}{{ authorized_decrypt_usb_filename }}:

@@ -3,12 +3,12 @@
 
 {% if grains['id'] == 'dom0' %}
   {% from "formatting.jinja" import yaml_escape, yaml_string %}
-  {% from "dependents.jinja" import add_dependencies, tasks, task_trigger_filename, task_command_filename, trigger_salt_name %}
+  {% from "dependents.jinja" import add_dependencies, add_external_change_dependency, tasks, task_trigger_filename, task_command_filename, trigger_salt_name %}
 
-  {% call add_dependencies('grub') %}
-    - file: /etc/default/grub
-  {% endcall %}
-
+{{ add_external_change_dependency('grub', '/etc/default/grub') }}
+{%- for file in salt['file.find']('/lib/dracut/dracut.conf.d/', type='f') %}
+{{ add_external_change_dependency('dracut', file) }}
+{%- endfor %}
   {%- for (name, task) in tasks.items() %}
     {%- set trigger_name = trigger_salt_name(name) %}
     {%- set trigger_command_name = trigger_salt_name(name) + " command" %}
@@ -21,7 +21,8 @@
     - group: root
     - makedirs: true
     - dir_mode: 750
-    - contents: {{ yaml_string(task) }}
+    - contents: |
+        {{ yaml_string(task) }}
 
 {{ yaml_string(trigger_name) }}:
   cmd.run:
