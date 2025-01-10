@@ -204,13 +204,19 @@
         #!/usr/bin/bash --
         # {{ salt_warning }}
         type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
-        # Allow the network interface to rebind directly at boot
+        # Allow the network interface to rebind directly at boot? (TODO: Forgotten legacy code?)
         systemctl daemon-reload
-        # getargbool 0 rd.qubes.hide_all_usb && exit
-
-        if ! getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
-            warn 'USB in dom0 is not restricted. Consider adding rd.qubes.hide_all_usb_after_decrypt.'
+        if ! getargbool 0 rd.qubes.hide_all_usb; then
+          warn 'rd.qubes.hide_all_usb is not supported with the current configuration.'
         fi
+
+        if getargbool 0 rd.qubes.hide_all_usb_after_decrypt; then
+            getargbool 1 usbcore.authorized_default || exit
+            warn 'USB in dom0 is not restricted during boot with only rd.qubes.hide_all_usb_after_decrypt. Consider adding usbcore.authorized_default=0 to the command line.'
+        else
+            warn 'USB in dom0 is not restricted. Consider adding rd.qubes.hide_all_usb_after_decrypt and usbcore.authorized_default=0.'
+         fi
+
 
 {{p}}{{ authorized_decrypt_usb_filename }}:
   file.managed:
