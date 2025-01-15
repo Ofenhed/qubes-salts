@@ -206,7 +206,7 @@
         type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
         # Allow the network interface to rebind directly at boot? (TODO: Forgotten legacy code?)
         systemctl daemon-reload
-        if ! getargbool 0 rd.qubes.hide_all_usb; then
+        if getargbool 0 rd.qubes.hide_all_usb; then
           warn 'rd.qubes.hide_all_usb is not supported with the current configuration.'
         fi
 
