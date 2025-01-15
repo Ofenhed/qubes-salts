@@ -16,6 +16,12 @@ user:
 
 {%- from "formatting.jinja" import yaml_escape, yaml_string, sha256sum, sha256sum_file %}
 
+{%- if grains['id'] == 'dom0' %}
+  {%- macro default_template() -%}
+    {{ salt['cmd.shell']('qubes-prefs default-template') }}
+  {%- endmacro %}
+{%- endif %}
+
 {%- set tasks = salt['pillar.get']('salt-build-targets', {}) %}
 
 {%- macro file_state_hash_filename(filename) -%}

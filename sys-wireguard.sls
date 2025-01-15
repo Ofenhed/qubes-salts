@@ -2,6 +2,7 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {% if grains['id'] == 'dom0' %}
+  {%- from "dependents.jinja" import default_template %}
   {%- set wireguard_vms = namespace(name=salt['pillar.get']('sys-wireguard-qubes', []), template=[]) %}
 
   {%- for vm in wireguard_vms.name %}
@@ -12,7 +13,7 @@
   - name: {{ vm }}
   - prefs:
     - label: red
-    - template: {{ salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', 'fedora-40-xfce') }}
+    - template: {{ salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()) }}
     - include-in-backups: false
     - class: AppVM
     {%- if for_disposable %}
