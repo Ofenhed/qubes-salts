@@ -223,7 +223,6 @@
          table inet wireguard_tunnel {
            chain only_forward_with_wireguard {
              type filter hook forward priority filter;
-             iifname != "{{ if_name }}" oifname != "{{ if_name }}" return
     {%- if allow_forward_to_wan %}
              # Forward traffic from the VPN
              iifname "{{ if_name }}" ct direction original counter oifgroup 1 counter accept
@@ -240,6 +239,12 @@
              oifgroup 1 masquerade
            }
     {%- endif %}
+         }
+
+         table ip qubes {
+             chain custom-forward {
+                 tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+             }
          }
 
 /rw/config/rc.local.d/20-wireguard.rc:
