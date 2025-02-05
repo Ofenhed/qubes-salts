@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import systemd_shell, salt_warning %}
-{% from "dependents.jinja" import add_dependencies %}
+{%- from "formatting.jinja" import systemd_shell, salt_warning, escape_bash %}
+{%- from "dependents.jinja" import add_dependencies %}
 
-{% set p = "External disk generator " %}
+{%- set p = "External disk generator " %}
 
-{% set service_name = 'external-pool-disk' %}
-{% set super_service_file = '/usr/lib/systemd/system/' + service_name + '.service' %}
-{% set named_service_file = '/usr/lib/systemd/system/' + service_name + '@.service' %}
-{% set watched_files = [p + named_service_file, p + super_service_file] %}
+{%- set service_name = 'external-pool-disk' %}
+{%- set super_service_path = '/usr/lib/systemd/system/' + service_name + '.service' %}
+{%- set named_service_path = '/usr/lib/systemd/system/' + service_name + '@.service' %}
+{%- set watched_files = [p + named_service_path, p + super_service_path] %}
+{%- set sys_usb = salt['pillar.get']('qvm:sys-usb:name', 'sys-usb') %}
 
-{% if grains['id'] == 'dom0' %}
-{{ p }}{{ super_service_file }}:
+{%- if grains['id'] == 'dom0' %}
+{{ p }}{{ super_service_path }}:
   file.managed:
-    - name: {{ super_service_file }}
+    - name: {{ super_service_path }}
     - user: root
     - group: root
     - mode: 444
@@ -26,7 +27,7 @@
         Requires=qubesd.service libvirtd.service dm-event.socket
         StopPropagatedFrom=qubes-core.service
         ReloadPropagatedFrom=qubes-core.service
-        After=qubes-vm@sys-usb.service qubes-core.service qubesd.service dm-event.socket dm-event.service
+        After=qubes-vm@{{ sys_usb }}.service qubes-core.service qubesd.service dm-event.socket dm-event.service
         StopWhenUnneeded=yes
         RefuseManualStart=yes
 
@@ -35,10 +36,9 @@
         RemainAfterExit=yes
         ExecStart=/usr/bin/true
 
-
-{{ p }}{{ named_service_file }}:
+{{ p }}{{ named_service_path }}:
   file.managed:
-    - name: {{ named_service_file }}
+    - name: {{ named_service_path }}
     - user: root
     - group: root
     - mode: 444
@@ -53,8 +53,8 @@
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart={% call systemd_shell() %}
-            {% for var in ['device_description',
+        ExecStart={%- call systemd_shell() %}
+            {%- for var in ['device_description',
                            'luks_name',
                            'logical_volume_name'] %}
             if [[ "${{ var }}" == "" ]] ; then
@@ -64,7 +64,7 @@
             fi
             {%- endfor %}
 
-            device=$(qvm-block | grep -- "$device_description" | grep -Po '^sys-usb:sd[a-z]+'"$partition_number"'(?=\s)')
+            device=$(qvm-block | grep -- "$device_description" | grep -Po '^'{{ escape_bash(sys_usb) }}':sd[a-z]+'"$partition_number"'(?=\s)')
             if [[ "$device" == "" ]] ; then
               echo "Could not find device matching $device_description"
               exit 1
@@ -152,13 +152,13 @@
                 echo "Pool has no running VMs"
                 break
               fi
-              {% if kill %}
+              {%- if kill %}
               echo "Killing {{ '$${#running_vms[@]}' }} VMs: $${running_vms[@]}"
               qvm-kill "$${running_vms[@]}"
-              {% else %}
+              {%- else %}
               echo "Shutting down {{ '$${#running_vms[@]}' }} VMs: $${running_vms[@]}"
               qvm-shutdown --wait "$${running_vms[@]}"
-              {% endif %}
+              {%- endif %}
             done
         {%- endmacro %}
 
@@ -173,7 +173,7 @@
 
             luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$')
             local_device=$(cryptsetup status "$luks_name" | grep -Po '(?<=device:)\s*/dev/[a-z]+$' | grep -Po '(?<=/dev/)[a-z]+$')
-            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po 'sys-usb:[a-z]+[0-9]*(?=\s)')
+            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po {{ escape_bash(sys_usb) }}':[a-z]+[0-9]*(?=\s)')
 
             echo "Deactivating device /dev/$logical_volume_name"
             lvchange -an "/dev/$logical_volume_name" || exit 1
@@ -190,7 +190,7 @@
 
 
     {%- for (qvm_pool, device) in salt['pillar.get']('external-usb:devices', []).items() %}
-  {% set env = {'device_description': device['device-description'],
+  {%- set env = {'device_description': device['device-description'],
                 'luks_name': device['luks-name'],
                 'partition_number': device['partition-number'] if 'partition-number' in device else '',
                 'logical_volume_name': device['logical-volume-name'],
@@ -198,8 +198,8 @@
                 'qvm_pool': qvm_pool,
                 'luks_allow_discard': '1' if 'luks-allow-discard' not in device or device['luks-allow-discard'] else '0'
                 } %}
-    {% set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
-    {% do watched_files.append(override_file) %}
+    {%- set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
+    {%- do watched_files.append(override_file) %}
 {{ p }}{{ override_file }}:
   file.managed:
     - name: {{ override_file }}
@@ -224,9 +224,9 @@
   {%- endcall %}
 
 
-  {% set blocker_py_path = "/var/cache/qubes-extension-sys-usb-shutdown-blocker" %}
-  {% set py_pip_name = "block_sys_usb_shutdown_for_external_usb_disk" %}
-  {% set py_short_package_name = "external_disk_handler" %}
+  {%- set blocker_py_path = "/var/cache/qubes-extension-sys-usb-shutdown-blocker" %}
+  {%- set py_pip_name = "block_sys_usb_shutdown_for_external_usb_disk" %}
+  {%- set py_short_package_name = "external_disk_handler" %}
 
 {{p}}{{ blocker_py_path }}/setup.py:
   file.managed:
@@ -257,7 +257,7 @@
           },
         )
 
-  {% set blocker_script_path = blocker_py_path + "/src/" + py_short_package_name + "/__init__.py" %}
+  {%- set blocker_script_path = blocker_py_path + "/src/" + py_short_package_name + "/__init__.py" %}
 
 {{p}}{{ blocker_script_path }}:
   file.managed:
@@ -279,13 +279,13 @@
             """This extension blocks sys-usb from being shut down if it has active mounts"""
             @qubes.ext.handler("domain-pre-shutdown")
             async def on_domain_pre_shutdown(self, vm, event, **kwargs):
-                if vm.name == "{{ salt['pillar.get']('qvm:sys-usb:name', 'sys-usb') }}":
+                if vm.name == "{{ sys_usb }}":
                     active_external_disks = await asyncio.create_subprocess_exec("/usr/bin/systemctl", "is-active", "-q", "{{ service_name }}.service")
                     if await active_external_disks.wait() == 0:
                         if not kwargs.get("force", False):
                             raise qubes.exc.QubesVMError(
                                 self,
-                                "USB disks from sys-usb are attached as a pool to dom0, shutting sys-usb down before detaching will cause problems!"
+                                f"USB disks from {vm.name} are attached as a pool to dom0, shutting {vm.name} down before detaching will cause problems!"
                             )
                         else:
                             stopping_mounts = await asyncio.create_subprocess_exec("/usr/bin/systemctl", "stop", "{{ service_name }}.service")
