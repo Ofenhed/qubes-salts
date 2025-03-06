@@ -191,12 +191,12 @@
 
     {%- for (qvm_pool, device) in salt['pillar.get']('external-usb:devices', []).items() %}
   {%- set env = {'device_description': device['device-description'],
-                'luks_name': device['luks-name'],
-                'partition_number': device['partition-number'] if 'partition-number' in device else '',
-                'logical_volume_name': device['logical-volume-name'],
-                'luks_header_path': device['luks-header-path'] if 'luks-header-path' in device else None,
-                'qvm_pool': qvm_pool,
-                'luks_allow_discard': '1' if 'luks-allow-discard' not in device or device['luks-allow-discard'] else '0'
+                 'luks_name': device['luks-name'],
+                 'partition_number': device['partition-number'] if 'partition-number' in device else '',
+                 'logical_volume_name': device['logical-volume-name'],
+                 'luks_header_path': device['luks-header-path'] if 'luks-header-path' in device else None,
+                 'qvm_pool': qvm_pool,
+                 'luks_allow_discard': '1' if 'luks-allow-discard' not in device or device['luks-allow-discard'] else '0'
                 } %}
     {%- set override_file = '/etc/systemd/system/' + service_name + '@' + env['luks_name'] + '.service.d/disk-parameters.conf' %}
     {%- do watched_files.append(override_file) %}
