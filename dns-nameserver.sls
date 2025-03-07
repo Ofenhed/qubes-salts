@@ -5,9 +5,9 @@
 
 {% if grains['id'] != 'dom0' %}
   {%- set net_vm = salt['pillar.get']('qubes:netvm') %}
-  {%- set all_custom_dns = salt['pillar.get']('custom-dns', {}) %}
-  {%- set custom_dns = all_custom_dns[net_vm] if net_vm in all_custom_dns else {} %}
+  {%- set custom_dns = salt['pillar.get']('custom-dns:' + grains['id'], {}) %}
   {%- set dns_servers = custom_dns['servers'] if 'servers' in custom_dns else [] %}
+  {%- set fallback_dns_servers = custom_dns['fallback_servers'] if 'fallback_servers' in custom_dns else [] %}
   {%- set dns_over_tls = 'dnsovertls' in custom_dns and custom_dns['dnsovertls'] %}
 /rw/config/rc.local.d/10-custom-dns.rc:
   {%- if (dns_servers | length) == 0 %}
@@ -23,13 +23,21 @@
     - contents: |
          #!/bin/sh
          # {{ salt_warning }}
-         network_device=$(ip route show default | grep -Po '(?<=dev )[^ ]+')
-         {%- for server in dns_servers %}
-         resolvectl dns "$network_device" {{ escape_bash(server) }}
-         {%- endfor %}
-         {%- if dns_over_tls %}
-         resolvectl dnsovertls "$network_device" yes
+         mkdir -p /etc/systemd/resolved.conf.d
+         cat <<EOF > /etc/systemd/resolved.conf.d/dns_servers.conf
+         [Resolve]
+         {%- if (dns_servers | length) > 0 %}
+         DNS={{- dns_servers | join(' ') }}
          {%- endif %}
+         {%- if (fallback_dns_servers | length) > 0 %}
+         FallbackDNS={{- fallback_dns_servers | join(' ') }}
+         {%- endif %}
+         {%- if dns_over_tls %}
+         DNSOverTls=yes
+         {%- endif %}
+         Domains=~.
+         EOF
+         systemctl restart systemd-resolved
 
   {%- endif %}
 {%- endif %}

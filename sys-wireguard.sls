@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% if grains['id'] == 'dom0' %}
+{%- set qubes_dns_servers = ['10.139.1.1', '10.139.1.2'] %}
+
+{%- if grains['id'] == 'dom0' %}
   {%- from "dependents.jinja" import default_template %}
   {%- set wireguard_vms = namespace(name=salt['pillar.get']('sys-wireguard-qubes', []), template=[]) %}
 
@@ -37,11 +39,11 @@
     - class: DispVM
     - provides-network: true
     - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
-    {% endif %}
+    {%- endif %}
 
-  {% endfor %}
-{% else %}
-  {% from "formatting.jinja" import salt_warning %}
+  {%- endfor %}
+{%- else %}
+  {%- from "formatting.jinja" import salt_warning %}
   {%- set vm = grains['nodename'] %}
   {%- set if_name_guess = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
   {%- set is_sysvm = (vm == 'sys-wireguard-' + if_name_guess) %}
@@ -49,14 +51,16 @@
   {%- set if_name = maybe_if_name if maybe_if_name != None else if_name_guess %}
   {%- set allow_qube_forward = salt['pillar.get']('wg:forward', false) %}
   {%- set allow_forward_to_wan = salt['pillar.get']('wg:forward-to-wan', false) %}
+  {%- set redirect_dns = salt['pillar.get']('wg:redirect-dns', true) %}
   {%- set fw_mark = salt['pillar.get']('wg:fw-mark', 51820) %}
+  {%- set dns_mark = salt['pillar.get']('wg:dns-mark', 0x515320) %}
   {%- set route_table = salt['pillar.get']('wg:route-table', 123) %}
   {%- set peers = salt['pillar.get']('wg:peers', []) %}
   {%- set peers_with_lookup = peers|rejectattr('endpoint-name', 'undefined')|list() %}
   {%- set wg = salt['pillar.get']('wg', {}) %}
   {%- set resolve_boot_delay = salt['pillar.get']('wg:resolve-delay', '15s') %}
-  {% macro wg_escape(key) -%}
-    {{ key | replace('+', '') | replace('=', '') }}
+  {%- macro wg_escape(key) %}
+    {{- key | replace('+', '') | replace('=', '') }}
   {%- endmacro %}
 
   {%- if is_sysvm or maybe_if_name != None %}
@@ -99,8 +103,8 @@
         [Install]
         WantedBy=multi-user.target
 
-      {% for peer in peers_with_lookup %}
-{% set override_file = '/rw/usrlocal/lib/systemd/system/wg-resolve@' + if_name + '-' + wg_escape(peer['public-key']) + '.service.d/environment.conf' %}
+      {%- for peer in peers_with_lookup %}
+{%- set override_file = '/rw/usrlocal/lib/systemd/system/wg-resolve@' + if_name + '-' + wg_escape(peer['public-key']) + '.service.d/environment.conf' %}
 {{ override_file }}:
   file.managed:
     - user: root
@@ -113,7 +117,7 @@
         # {{ salt_warning }}
         [Service]
         Environment='wg_if_name={{ if_name }}' 'wg_peer={{ peer['public-key'] }}' 'wg_endpoint={{ peer['endpoint-name'] }}'
-      {% endfor %}
+      {%- endfor %}
 
 /rw/usrlocal/lib/systemd/system/wg-resolve.service:
   file.managed:
@@ -144,7 +148,7 @@
         [Install]
         WantedBy=multi-user.target
 
-    {% if (peers_with_lookup | length) > 0 %}
+    {%- if (peers_with_lookup | length) > 0 %}
 /rw/usrlocal/lib/systemd/system/wg-resolve.timer:
   file.managed:
     - user: root
@@ -183,7 +187,7 @@
         PreDown = ip rule delete not fwmark {{ fw_mark }} table {{ route_table }}
         {%- if allow_forward_to_wan or allow_qube_forward %}  ; ip rule delete iif %i table main {%- endif %}
     {%- if wg['dns'] is defined %}
-        DNS = {{ wg['dns'] }}
+        DNS = {{ (wg['dns'] | join(', ')) if wg['dns'] is sequence else wg['dns'] }}
     {%- endif %}
     {%- if wg['mtu'] is defined %}
         MTU = {{ wg['mtu'] }}
@@ -218,6 +222,13 @@
     - contents: |
          #!/usr/sbin/nft -f
          # {{ salt_warning }}
+         {%- if redirect_dns %}
+         table ip qubes {
+           chain custom-input {
+             ct mark {{ dns_mark }} accept
+           }
+         }
+         {%- endif %}
          table inet wireguard_tunnel
          delete table inet wireguard_tunnel
          table inet wireguard_tunnel {
@@ -233,6 +244,14 @@
     {%- endif %}
              counter drop
            }
+
+    {%- if redirect_dns %}
+           chain redirect_dns {
+               type nat hook prerouting priority dstnat - 10;
+               iifgroup 2 ip daddr { {{ qubes_dns_servers | join(', ') }} } meta l4proto {tcp, udp} th dport domain ct mark set {{ dns_mark }} counter dnat to 127.0.0.54
+           }
+    {%- endif %}
+
     {%- if allow_forward_to_wan %}
            chain nat_wan_forward {
              type nat hook postrouting priority srcnat;
@@ -246,6 +265,23 @@
                  tcp flags syn / syn,rst tcp option maxseg size set rt mtu
              }
          }
+
+/rw/config/rc.local.d/30-allow-redirect-to-localhost.rc:
+  {%- if not redirect_dns %}
+  file.absent: []
+  {%- else %}
+  file.managed:
+    - user: root
+    - group: root
+    - mode: 555
+    - makedirs: true
+    - dir_mode: 555
+    - replace: true
+    - contents: |
+        #!/bin/bash
+        # {{ salt_warning }}
+        sysctl -w net.ipv4.conf.all.route_localnet=1
+  {%- endif %}
 
 /rw/config/rc.local.d/20-wireguard.rc:
   file.managed:
@@ -263,4 +299,4 @@
         systemctl enable --now wg-resolve.timer
     {%- endif %}
   {%- endif %}
-{% endif %}
+{%- endif %}
