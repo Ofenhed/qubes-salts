@@ -2,14 +2,57 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
-{% from "formatting.jinja" import yaml_string, unique_lines %}
-{%- set upgrade_all = 'Upgrade all installed packages' %}
-{%- set installed = 'Install user wanted packages' %}
-{%- set downloaded = 'Download user sometimes wanted packages' %}
-{%- set maybe_neovim = 'Neovim unless installed locally' %}
-{%- set symlink_opt_neovim = 'Install global nvim symlink to /opt/nvim' %}
-{%- set symlink_vim_to_neovim = 'Install global nvim symlink from vim' %}
-{%- set uninstall_vim = 'Uninstall vim if neovim is installed' %}
+  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell %}
+  {%- set upgrade_all = 'Upgrade all installed packages' %}
+  {%- set keep_cache_for_non_template = 'Keep dnf cache for non template VMs' %}
+  {%- set enable_non_template_cache_service = 'Enable dnf caching service' %}
+  {%- set keep_cache_for_non_template_service = 'keep-dnf-cache.service' %}
+  {%- set installed = 'Install user wanted packages' %}
+  {%- set downloaded = 'Download user sometimes wanted packages' %}
+  {%- set maybe_neovim = 'Neovim unless installed locally' %}
+  {%- set symlink_opt_neovim = 'Install global nvim symlink to /opt/nvim' %}
+  {%- set symlink_vim_to_neovim = 'Install global nvim symlink from vim' %}
+  {%- set uninstall_vim = 'Uninstall vim if neovim is installed' %}
+
+  {% if grains['os_family'] == 'RedHat' %}
+{{ keep_cache_for_non_template }}:
+  file.managed:
+    - name: /usr/lib/systemd/system/{{ keep_cache_for_non_template_service }}
+    - user: root
+    - group: root
+    - mode: 444
+    - dir_mode: 755
+    - makedirs: true
+    - replace: true
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        Description={{ keep_cache_for_non_template }}
+        After=qubes-db.service
+        Requires=qubes-db.service
+
+        [Service]
+        Type=oneshot
+        ExecStart={%- call systemd_shell() %}
+            gawk -i inplace '/^\[.*\]$/ {p=($0=="[main]")}; { if (!p || (p && !(/keepcache/))) print $0 ; if ($0=="[main]") print "keepcache = True" }' /etc/dnf/dnf.conf
+        {%- endcall %}
+        ExecCondition={%- call systemd_shell() %}
+          [ "$(qubesdb-read /type)" != "TemplateVM" ]
+        {%- endcall %}
+
+        ExecStart=/bin/bash -c 'wg set "$wg_if_name" peer "$wg_peer" endpoint "$wg_endpoint"'
+        RemainAfterExit=yes
+
+        [Install]
+        WantedBy=sysinit.target
+
+{{ enable_non_template_cache_service }}:
+  service.enabled:
+    - name: {{ keep_cache_for_non_template_service }}
+    - require:
+      - file: {{ keep_cache_for_non_template }}
+
+  {%- endif %}
 
 {{ upgrade_all }}:
   pkg.uptodate:
