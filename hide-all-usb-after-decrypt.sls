@@ -4,7 +4,7 @@
 # loads either this module or fido2, as such:
 # add_dracutmodules+=" hide-all-usb-after-decrypt "
 
-{% from "formatting.jinja" import systemd_shell, salt_warning %}
+{% from "formatting.jinja" import escape_bash, systemd_shell, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Hide USB after decrypt " %}
@@ -15,6 +15,23 @@
 {% set hide_all_usb_service_path = "/usr/lib/systemd/system/" + hide_all_usb_service_name %}
 {% set hide_all_network_service_name = "hide-all-network-on-boot.service" %}
 {% set hide_all_network_service_path = "/usr/lib/systemd/system/" + hide_all_network_service_name %}
+{% set deadline = {hide_all_usb_service_path: "cryptsetup.target", hide_all_network_service_path: "network-pre.target"} %}
+{% set wanted_by = {
+     hide_all_usb_service_path: "systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service",
+     hide_all_network_service_path: "basic.target"
+} %}
+{% set lspci_awk_filter = {
+     hide_all_usb_service_path: '/^[^ ]* "0c03/ {print $1}',
+     hide_all_network_service_path:  '/^[^ ]* "02/ {print $1}'
+} %}
+{% set extra_pci_to_unbind_env_var = {
+     hide_all_usb_service_path: 'EXTRA_USB_TO_UNBIND',
+     hide_all_network_service_path:  'EXTRA_NETWORK_TO_UNBIND'
+} %}
+{% set service_description = {
+     hide_all_usb_service_path: 'Unbind all USB after disk decryption',
+     hide_all_network_service_path:  'Unbind all network when the machine boots'
+} %}
 {% set hook_script_name = "qubes-pciback.sh" %}
 {% set hide_all_env_path = "/etc/sysconfig/hide-all-usb-after-decrypt" %}
 {% set authorized_decrypt_usb = salt['pillar.get']('hide-all-usb-after-decrypt:udev:authorized', [
@@ -83,15 +100,13 @@
         }
 
         installkernel() {
-            installkernel() {
-                local mod=
+            local mod=
 
-                for mod in pciback xen-pciback; do
-                    if modinfo -k "${kernel}" "${mod}" >/dev/null 2>&1; then
-                        hostonly='' instmods "${mod}"
-                    fi
-                done
-            }
+            for mod in pciback xen-pciback; do
+                if modinfo -k "${kernel}" "${mod}" >/dev/null 2>&1; then
+                    hostonly='' instmods "${mod}"
+                fi
+            done
         }
 
 {{p}}{{ hide_all_env_path }}:
@@ -104,8 +119,8 @@
     - require:
       - file: {{p}}{{ mod_dir }}
     - contents: |
-        EXTRA_USB_TO_UNBIND={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-usb | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
-        EXTRA_NETWORK_TO_UNBIND={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-net | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
+        {{ extra_pci_to_unbind_env_var[hide_all_usb_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-usb | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
+        {{ extra_pci_to_unbind_env_var[hide_all_network_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-net | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
 
 {% for service_path in [hide_all_usb_service_path, hide_all_network_service_path] %}
 {{p}}{{ service_path }}:
@@ -120,16 +135,10 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        Description=
-        {%- if service_path == hide_all_usb_service_path -%}
-        Unbind all USB after disk decryption
-        {%- elif service_path == hide_all_network_service_path -%}
-        Unbind all network when the machine boots
-        {%- endif %}
+        Description={{ service_description[service_path] }}
         ConditionKernelCommandLine=!rd.qubes.hide_all_usb
-        {%- set deadline = "cryptsetup.target" if service_path == hide_all_usb_service_path else "network-pre.target" %}
-        Before={{ deadline }}
-        Conflicts={{ deadline }}
+        Before={{ deadline[service_path] }}
+        Conflicts={{ deadline[service_path] }}
 
         [Service]
         Type=oneshot
@@ -147,11 +156,7 @@
                 exit 1
             fi
             set -e
-            {%- if service_path == hide_all_usb_service_path %}
-              hide_pci=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"0c03/ {print \$1}"; echo -n "$EXTRA_USB_TO_UNBIND"; } | sort -u) || die 'Cannot obtain list of PCI devices to unbind.'
-            {%- elif service_path == hide_all_network_service_path %}
-              hide_pci=$(set -o pipefail; { lspci -mm -n | awk "/^[^ ]* \"02/ {print \$1}"; echo -n "$EXTRA_NETWORK_TO_UNBIND"; } | sort -u) ||  die 'Cannot obtain list of PCI devices to unbind.'
-            {%- endif %}
+            hide_pci=$(set -o pipefail; { lspci -mm -n | awk {{ escape_bash(lspci_awk_filter[service_path]) }}; echo -n "${{ extra_pci_to_unbind_env_var[service_path] }}"; } | sort -u) || die 'Cannot obtain list of PCI devices to unbind.'
 
             for dev in $hide_pci; do
               BDF="0000:$dev"
@@ -182,12 +187,7 @@
         {%- endcall %}
 
         [Install]
-        WantedBy=
-        {%- if service_path == hide_all_usb_service_path -%}
-          systemd-ask-password-plymouth.service systemd-ask-password-wall.service systemd-ask-password-console.service
-        {%- elif service_path == hide_all_network_service_path -%}
-          basic.target
-        {%- endif %}
+        WantedBy={{ wanted_by[service_path] }}
 {% endfor %}
 
 
