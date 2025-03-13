@@ -43,7 +43,7 @@
 
   {%- endfor %}
 {%- else %}
-  {%- from "formatting.jinja" import salt_warning %}
+  {%- from "formatting.jinja" import salt_warning, systemd_shell %}
   {%- set vm = grains['nodename'] %}
   {%- set if_name_guess = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
   {%- set is_sysvm = (vm == 'sys-wireguard-' + if_name_guess) %}
@@ -93,9 +93,19 @@
 
         [Service]
         Type=oneshot
-        ExecStartPre=/bin/bash -c 'transfer=$(wg show "$${wg_if_name}" latest-handshakes | grep ^"$${wg_peer}") ; vpn_receiced=$(awk \'{ print $2 }\' <<< "$transfer") ; vpn_sent=$(awk \'{ print $3 }\' <<< "$transfer") ; [[ $vpn_receiced -eq 0 ]] && [[ $vpn_sent -ne 0 ]]'
-        ExecCondition=/bin/bash -c 'latest_handshake=$(wg show {{ if_name }} latest-handshakes | grep ^"$${wg_peer}" | awk \'{ print $2 }\') ; [[ $latest_handshake -eq 0 ]] || [[ $(($(date +%%s)-$latest_handshake)) -gt 180 ]]'
-        ExecStart=/bin/bash -c 'wg set "$wg_if_name" peer "$wg_peer" endpoint "$wg_endpoint"'
+        ExecStartPre={%- call systemd_shell() %}
+          transfer=$(wg show "$${wg_if_name}" latest-handshakes | grep ^"$${wg_peer}")
+          vpn_receiced=$(awk '{ print $2 }' <<< "$transfer")
+          vpn_sent=$(awk '{ print $3 }' <<< "$transfer")
+          [[ $vpn_receiced -eq 0 ]] && [[ $vpn_sent -ne 0 ]]
+        {%- endcall %}
+        ExecCondition={%- call systemd_shell() %}
+          latest_handshake=$(wg show {{ if_name }} latest-handshakes | grep ^"$${wg_peer}" | awk '{ print $2 }')
+          [[ $latest_handshake -eq 0 ]] || [[ $(($(date +%%s)-$latest_handshake)) -gt 180 ]]
+        {%- endcall %}
+        ExecStart={%- call systemd_shell() %}
+          wg set "$wg_if_name" peer "$wg_peer" endpoint "$wg_endpoint"
+        {%- endcall %}
         RemainAfterExit=yes
         Restart=on-failure
         RestartSec=5s
