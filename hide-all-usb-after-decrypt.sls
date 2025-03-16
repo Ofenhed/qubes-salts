@@ -4,7 +4,7 @@
 # loads either this module or fido2, as such:
 # add_dracutmodules+=" hide-all-usb-after-decrypt "
 
-{% from "formatting.jinja" import escape_bash, systemd_shell, salt_warning %}
+{% from "formatting.jinja" import bash_argument, systemd_shell, salt_warning %}
 {% from "dependents.jinja" import add_dependencies %}
 
 {% set p = "Hide USB after decrypt " %}
@@ -156,7 +156,7 @@
                 exit 1
             fi
             set -e
-            hide_pci=$(set -o pipefail; { lspci -mm -n | awk {{ escape_bash(lspci_awk_filter[service_path]) }}; echo -n "${{ extra_pci_to_unbind_env_var[service_path] }}"; } | sort -u) || die 'Cannot obtain list of PCI devices to unbind.'
+            hide_pci=$(set -o pipefail; { lspci -mm -n | awk {{ bash_argument(lspci_awk_filter[service_path]) }}; echo -n "${{ extra_pci_to_unbind_env_var[service_path] }}"; } | sort -u) || die 'Cannot obtain list of PCI devices to unbind.'
 
             for dev in $hide_pci; do
               BDF="0000:$dev"

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{% from "formatting.jinja" import escape_bash, salt_warning %}
+{% from "formatting.jinja" import salt_warning %}
 
 {%- set vm_type = salt['pillar.get']('qubes:type') %}
 
