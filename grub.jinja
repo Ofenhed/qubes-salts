@@ -1,24 +1,26 @@
+{%- from "formatting.jinja" import yaml_string, escape_bash %}
 {%- set cmdline_linux = 'GRUB_CMDLINE_LINUX' -%}
 {%- set cmdline_xen = 'GRUB_CMDLINE_XEN_DEFAULT' -%}
 {%- set all_options = [] -%}
-{%- macro grub_options(cmdline, name, options, pillar = None, default=True) %}
-  {% set yaml_name = "grub " + cmdline + "+=" + (options | replace(":", "_")) %}
-  {% set is_active = salt['pillar.get']('grub:' + pillar, default) if pillar else default %}
-  {% do all_options.append(yaml_name) %}
-  {% set line = cmdline + '="$' + cmdline + ' ' + options + '" # ' + name %}
+{%- macro grub_options(cmdline, name, options, pillar = None, default=True, escape=True) %}
+  {%- set yaml_name = "grub " + cmdline + "+=" + (options | replace(":", "_")) %}
+  {%- set is_active = salt['pillar.get']('grub:' + pillar, default) if pillar else default %}
+  {%- do all_options.append(yaml_name) %}
+  {%- set maybe_escaped = escape_bash(caller=options) if escape else ('"' + options + '"') %}
+  {%- set line = cmdline + '="$' + cmdline + ' "' + maybe_escaped + ' # ' + name %}
 {{ yaml_name }}:
   file.replace:
     - name: /etc/default/grub
-    - pattern: '^( *{{ line | regex_escape }} *(\n|$))'
-    {% if is_active %}
+    - pattern: {{ yaml_string('^( *' + (line | regex_escape) + ' *(\n|$))') }}
+    {%- if is_active %}
     - repl: '\1'
     - order: 5
     - append_if_not_found: True
-    - not_found_content: '{{ line }}'
-    {% else %}
+    - not_found_content: {{ yaml_string(line) }}
+    {%- else %}
     - repl: ''
-    {% endif %}
-{% endmacro -%}
+    {%- endif %}
+{%- endmacro %}
 
 {%- macro grub_list_option(cmdline, name, option, values, pillar=None, default=True) -%}
   {% set is_active = salt['pillar.get']('grub:' + pillar, default) if pillar else default %}

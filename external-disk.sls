@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
-{%- from "formatting.jinja" import systemd_shell, salt_warning, escape_bash %}
+{%- from "formatting.jinja" import systemd_shell, salt_warning, bash_argument %}
 {%- from "dependents.jinja" import add_dependencies %}
 
 {%- set p = "External disk generator " %}
@@ -64,7 +64,7 @@
             fi
             {%- endfor %}
 
-            device=$(qvm-block | grep -- "$device_description" | grep -Po '^'{{ escape_bash(sys_usb) }}':sd[a-z]+'"$partition_number"'(?=\s)')
+            device=$(qvm-block | grep -- "$device_description" | grep -Po '^'{{ bash_argument(sys_usb | regex_escape, before='', after='') }}':sd[a-z]+'"$partition_number"'(?=\s)')
             if [[ "$device" == "" ]] ; then
               echo "Could not find device matching $device_description"
               exit 1
@@ -173,7 +173,7 @@
 
             luks_name=$(vgs --noheadings -o pv_name "$logical_volume_name" | grep -Po '(?<=/)[^/]+$')
             local_device=$(cryptsetup status "$luks_name" | grep -Po '(?<=device:)\s*/dev/[a-z]+$' | grep -Po '(?<=/dev/)[a-z]+$')
-            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po {{ escape_bash(sys_usb) }}':[a-z]+[0-9]*(?=\s)')
+            remote_device=$(qvm-block | grep -P "frontend-dev=$local_device[,)]" | grep -Po {{ bash_argument(sys_usb | regex_escape, after='') }}':[a-z]+[0-9]*(?=\s)')
 
             echo "Deactivating device /dev/$logical_volume_name"
             lvchange -an "/dev/$logical_volume_name" || exit 1

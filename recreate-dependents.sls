@@ -2,7 +2,7 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {% if grains['id'] == 'dom0' %}
-  {% from "formatting.jinja" import yaml_escape, yaml_string %}
+  {% from "formatting.jinja" import yaml_escape, yaml_string, bash_argument %}
   {% from "dependents.jinja" import add_dependencies, add_external_change_dependency, tasks, task_trigger_filename, task_command_filename, trigger_salt_name %}
 
 {{ add_external_change_dependency('grub', '/etc/default/grub') }}
@@ -21,12 +21,19 @@
     - group: root
     - makedirs: true
     - dir_mode: 750
-    - contents: |
-        {{ yaml_string(task) }}
+    - contents: {% call yaml_string() %}
+        {%- for part in task %}
+          {{- bash_argument(part, before='', after=' ') }}
+        {%- endfor %}
+      {%- endcall %}
 
 {{ yaml_string(trigger_name) }}:
   cmd.run:
-    - name: {{ yaml_string(task) }}
+    - name: {% call yaml_string() %}
+        {%- for part in task %}
+          {{- bash_argument(part, before='', after=' ') }}
+        {%- endfor %}
+      {%- endcall %}
     - order: last
     - onchanges:
       - file: {{ task_trigger_filename(name) }}

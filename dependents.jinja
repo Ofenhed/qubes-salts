@@ -41,7 +41,7 @@ Executing trigger {{ task }}
 {%- endmacro %}
 
 {%- macro trigger_as_dependency(task) -%}
-cmd: {{ yaml_string(trigger_salt_name(task), "\"") }}
+cmd: {{ yaml_string(caller=trigger_salt_name(task)) }}
 {%- endmacro %}
 
 {%- macro add_dependencies(task, caller='') %}

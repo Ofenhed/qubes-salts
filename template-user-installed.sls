@@ -188,7 +188,7 @@ Notify qubes about installed updates:
     - enablerepo: {{ yaml_string(download['repo']['name']) }}
       {%- else %}
   cmd.run:
-    - name: {{ format_exec_env_script('DNF_INSTALL_COMMAND') }}
+    - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
     - env:
       - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} {{ bash_argument(download['name']) }}
       {%- endif %}

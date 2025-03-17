@@ -4,8 +4,8 @@
   {{- "'" + after }}
 {%- endmacro %}
 
-{%- macro bash_argument(caller='') %}
-  {{- escape_bash(caller=caller, before=' ', after=' ') }}
+{%- macro bash_argument(value, before=' ', after=' ') %}
+  {{- escape_bash(caller=value, before=before, after=after) }}
 {%- endmacro %}
 
 {%- macro format_shell_exec(shell=none, caller='') %}
