@@ -1,5 +1,5 @@
 {%- if grains['id'] == 'dom0' %}
-{% from "formatting.jinja" import systemd_shell, bash_argument %}
+{% from "formatting.jinja" import systemd_shell, bash_argument, format_shell_exec, yaml_string %}
 {%- from "dependents.jinja" import add_dependencies, trigger_as_dependency %}
 
 {%- set p = "Encrypted boot volume - " %}
@@ -26,6 +26,9 @@
 {%- set boot_watcher_service_path = systemd_path + "/" + boot_watcher_service %}
 {%- set boot_sync_instance_service_path = systemd_path + "/" + boot_sync_service("") %}
 {%- set boot_sync_instance_path_path = systemd_path + "/" + boot_sync_path("") %}
+{%- set grub2_mkconfig_path = "/usr/local/sbin/grub2-mkconfig" %}
+
+{%- set boot_shadow = '/tmp/boot_shadow' %}
 
 {%- set watched_files = [boot_watcher_service_path, boot_watcher_initial_scanner_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path] %}
 
@@ -48,13 +51,12 @@
         Type=forking
         # TODO: Mount boot and EFI here
         ExecStart={%- call systemd_shell() %}
-          mkdir /tmp/boot_shadow
-          mount -t {{ bash_argument(salt['pillar.get']('partition:boot:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot:source')) }} /tmp/boot_shadow
-          mkdir /tmp/boot_shadow/efi
-          mount -t {{ bash_argument(salt['pillar.get']('partition:boot_efi:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot_efi:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot_efi:source')) }} /tmp/boot_shadow/efi
+          mkdir {{ boot_shadow }}
+          mount -t {{ bash_argument(salt['pillar.get']('partition:boot:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot:source')) }} {{ boot_shadow }}
+          mkdir {{ boot_shadow }}/efi
+          mount -t {{ bash_argument(salt['pillar.get']('partition:boot_efi:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot_efi:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot_efi:source')) }} {{ boot_shadow }}/efi
           tail -f /dev/null & ln -s "/proc/$!" /tmp/parent
         {%- endcall %}
-        ExecStopPre=find /tmp/boot_shadow -type f
         ProtectSystem=strict
         PrivateTmp=true
         
@@ -110,7 +112,7 @@
         Environment="BOOT_DIR=%I"
         ExecStart=nsenter --mount=/tmp/parent/ns/mnt {% call systemd_shell() %}
           (
-            cd "/tmp/boot_shadow/$BOOT_DIR"
+            cd "{{ boot_shadow }}/$BOOT_DIR"
             for target_file in *; do
                 if [ -f "$target_file" ] && [ ! -f "/boot/$BOOT_DIR/$target_file" ]; then
                     rm $target_file
@@ -121,10 +123,10 @@
             cd "/boot/$BOOT_DIR"
             for source_file in *; do
                 if [ -f "$source_file" ]; then
-                    if [ ! -f "/tmp/boot_shadow/$BOOT_DIR/$source_file" ]; then
-                        cp -ua "$source_file" "/tmp/boot_shadow/$BOOT_DIR/"
-                    elif ! diff "$source_file" "/tmp/boot_shadow/$BOOT_DIR/$source_file"; then
-                        cp -a "$source_file" "/tmp/boot_shadow/$BOOT_DIR/"
+                    if [ ! -f "{{ boot_shadow }}/$BOOT_DIR/$source_file" ]; then
+                        cp -ua "$source_file" "{{ boot_shadow }}/$BOOT_DIR/"
+                    elif ! diff "$source_file" "{{ boot_shadow }}/$BOOT_DIR/$source_file"; then
+                        cp -a "$source_file" "{{ boot_shadow }}/$BOOT_DIR/"
                     fi
                 fi
             done
@@ -157,6 +159,41 @@
         [Install]
         WantedBy=multi-user.target
 
+{{p}}{{ grub2_mkconfig_path }}:
+  file.managed:
+    - name: {{ grub2_mkconfig_path }}
+    - user: root
+    - require:
+        - service: {{p}}{{ enable_systemd_service }}
+    - require_in:
+        - {{ trigger_as_dependency('grub') }}
+    - group: root
+    - mode: 555
+    - replace: true
+    - contents: |
+        #!/bin/sh
+        if [ $# -ne 2 ] || [ $1 != "-o" ]; then
+          echo Usage: $0 -o filename >&2
+          exit 1
+        fi
+        exec 5<> $2
+
+        process_pid=$(systemctl show --property MainPID --value {{ bash_argument(boot_watcher_service) }})
+        if [ $process_pid -eq 0 ]; then
+          echo The service {{ bash_argument(boot_watcher_service) }} must be running for grub2-mkconfig to work >&2
+          exit 1
+        fi
+        nsenter --mount="/proc/$process_pid/ns/mnt" {% call format_shell_exec() -%}
+          unshare --propagation private --mount {% call format_shell_exec() -%}
+            set -e
+            mount -B /dev/null {{ bash_argument(grub2_mkconfig_path) }}
+            mount -B {{ boot_shadow }}/ /boot/
+            mount -t tmpfs tmpfs /tmp/
+            grub2-mkconfig -o /tmp/grub.cfg
+            cat < /tmp/grub.cfg >&5
+          {%- endcall %}
+        {%- endcall %}
+
 {%- call add_dependencies('daemon-reload') %}
   {%- for file in watched_files %}
   - file: {{p}}{{ file }}
@@ -166,7 +203,8 @@
 {{p}}{{ enable_systemd_service }}:
   service.running:
     - name: {{ boot_watcher_service }}
-    - watch:
+    - enable: true
+    - require:
       - {{ trigger_as_dependency('daemon-reload') }}
 
 {%- endif %}
