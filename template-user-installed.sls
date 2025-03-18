@@ -80,7 +80,7 @@ Notify qubes about installed updates:
   cmd.run:
     - name: /usr/lib/qubes/upgrades-status-notify
     - onchanges:
-      - {{ upgrade_all_type }}: {{ upgrade_all }}
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
 
 {{p}}{{ installed }}:
   pkg.installed:
