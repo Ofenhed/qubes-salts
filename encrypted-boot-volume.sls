@@ -215,46 +215,50 @@
               systemctl stop "{{ boot_sync_path("%i") }}"
               exit
           fi
-          (
-            if cd "/boot/$BOOT_DIR" 2>/dev/null; then
-                mkdir -p "$BOOT_SHADOW/$BOOT_DIR"
-                for source_file in * .[^.]*; do
-                    if [ -f "$source_file" ]; then
-                        if [ ! -f "$BOOT_SHADOW/$BOOT_DIR/$source_file" ]; then
-                            echo "Copying /boot/$BOOT_DIR/$source_file"
-                            cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"
-                        elif ! diff -q "$source_file" "$BOOT_SHADOW/$BOOT_DIR/$source_file" >/dev/null; then
-                            echo "Replacing /boot/$BOOT_DIR/$source_file"
-                            cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"
-                        fi
-                    elif [ -d "$source_file" ]; then
-                        mkdir -p "$BOOT_SHADOW/$BOOT_DIR/$source_file"
-                        boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$source_file")" 2>/dev/null)
-                        if ! systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
-                            systemctl start --no-block "{{ boot_sync_service("$boot_path") }}"
-                        fi
-                    fi
-                done
-            fi
-          )
-          (
-            if cd "$BOOT_SHADOW/$BOOT_DIR" 2>/dev/null; then
-                for target_file in * .[^.]*; do
-                    if [ -f "$target_file" ] && [ ! -f "/boot/$BOOT_DIR/$target_file" ]; then
-                        echo "Removing /boot/$BOOT_DIR/$target_file"
-                        rm $target_file
-                    elif [ -d "$target_file" ] && [ ! -d "/boot/$BOOT_DIR/$target_file" ]; then
-                        boot_path=$(systemd-escape --path "$(realpath --relative-to "$BOOT_SHADOW" "$target_file")" 2>/dev/null)
-                        systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
-                    fi
-                done
-                if [ ! -d "/boot/$BOOT_DIR" ]; then
-                    echo "Removing /boot/$BOOT_DIR/"
-                    systemctl stop "{{ boot_sync_path("%i") }}"
-                    rmdir -- "$BOOT_SHADOW/$BOOT_DIR"
-                fi
-            fi
-          )
+          result=0
+          if cd "/boot/$BOOT_DIR" 2>/dev/null; then
+              mkdir -p "$BOOT_SHADOW/$BOOT_DIR"
+              for source_file in * .[^.]*; do
+                  if [ -f "$source_file" ]; then
+                      if [ ! -f "$BOOT_SHADOW/$BOOT_DIR/$source_file" ]; then
+                          echo "Copying /boot/$BOOT_DIR/$source_file"
+                          if ! cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"; then
+                              echo "Failed to copy /boot/$BOOT_DIR/$source_file"
+                              nonlocal result=1
+                          fi
+                      elif ! diff -q "$source_file" "$BOOT_SHADOW/$BOOT_DIR/$source_file" >/dev/null; then
+                          echo "Replacing /boot/$BOOT_DIR/$source_file"
+                          if ! cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"; then
+                              echo "Failed to copy /boot/$BOOT_DIR/$source_file"
+                              result=1
+                          fi
+                      fi
+                  elif [ -d "$source_file" ]; then
+                      mkdir -p "$BOOT_SHADOW/$BOOT_DIR/$source_file"
+                      boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$source_file")" 2>/dev/null)
+                      if ! systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
+                          systemctl start --no-block "{{ boot_sync_service("$boot_path") }}"
+                      fi
+                  fi
+              done
+          fi
+          if cd "$BOOT_SHADOW/$BOOT_DIR" 2>/dev/null; then
+              for target_file in * .[^.]*; do
+                  if [ -f "$target_file" ] && [ ! -f "/boot/$BOOT_DIR/$target_file" ]; then
+                      echo "Removing /boot/$BOOT_DIR/$target_file"
+                      rm $target_file
+                  elif [ -d "$target_file" ] && [ ! -d "/boot/$BOOT_DIR/$target_file" ]; then
+                      boot_path=$(systemd-escape --path "$(realpath --relative-to "$BOOT_SHADOW" "$target_file")" 2>/dev/null)
+                      systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
+                  fi
+              done
+              if [ ! -d "/boot/$BOOT_DIR" ]; then
+                  echo "Removing /boot/$BOOT_DIR/"
+                  systemctl stop "{{ boot_sync_path("%i") }}"
+                  rmdir -- "$BOOT_SHADOW/$BOOT_DIR"
+              fi
+          fi
+          exit "$result"
         {%- endcall %}
         ProtectSystem=strict
         PrivateTmp=true
