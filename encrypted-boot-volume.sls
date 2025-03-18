@@ -1,5 +1,5 @@
 {%- if grains['id'] == 'dom0' %}
-{% from "formatting.jinja" import systemd_shell, bash_argument, format_shell_exec, yaml_string %}
+{% from "formatting.jinja" import systemd_shell, systemd_string, bash_argument, format_shell_exec, yaml_string, salt_warning %}
 {%- from "dependents.jinja" import add_dependencies, trigger_as_dependency %}
 
 {%- set p = "Encrypted boot volume - " %}
@@ -20,30 +20,125 @@
   boot-watcher-init@{{ name }}.service
 {%- endmacro %}
 
+{%- macro boot_sync_failed_service(name) -%}
+  boot-sync-failed@.service
+{%- endmacro %}
+
 {%- set systemd_path = "/usr/lib/systemd/system" %}
 {%- set boot_watcher_service = "boot-watcher.service" %}
 {%- set boot_watcher_initial_scanner_service_path = systemd_path + "/" + boot_watcher_initial_scanner_service("") %}
 {%- set boot_watcher_service_path = systemd_path + "/" + boot_watcher_service %}
 {%- set boot_sync_instance_service_path = systemd_path + "/" + boot_sync_service("") %}
 {%- set boot_sync_instance_path_path = systemd_path + "/" + boot_sync_path("") %}
+{%- set boot_sync_failed_service_path = systemd_path + "/" + boot_sync_failed_service('') %}
 {%- set grub2_mkconfig_path = "/usr/local/sbin/grub2-mkconfig" %}
+{%- set update_fstab = "Update fstab" %}
+
+{%- set salt_pillar_base_filename = 'encrypted-boot-volumes' %}
+
+{%- set encrypted_boot_volume_pillar_sls = '/srv/user_pillar/' + salt_pillar_base_filename + '.sls' %}
+{%- set encrypted_boot_volume_pillar_top = '/srv/user_pillar/' + salt_pillar_base_filename + '.top' %}
 
 {%- set boot_shadow = '/tmp/boot_shadow' %}
+{%- set proc_parent = '/tmp/parent' %}
 
-{%- set watched_files = [boot_watcher_service_path, boot_watcher_initial_scanner_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path] %}
+{%- set systemd_files = [boot_watcher_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path, boot_sync_failed_service_path] %}
 
 {%- set enable_systemd_service = "Enable service " + boot_watcher_service %}
-{%- set disable_systemd_service = "Disable service " + boot_watcher_service %}
+{%- set shut_down_systemd_service = "Shut down service " + boot_watcher_service %}
 
-{%- set boot_partition = salt['pillar.get']('partition:boot', none) %}
-{%- set boot_efi_partition = salt['pillar.get']('partition:boot_efi', none) %}
+{%- set is_activated = salt['pillar.get']('activate-encrypted-boot', false) %}
+{%- set notify_failure_to_user = salt['pillar.get']('notify-user', none) %}
+{%- set comment_prefix = '#shadow:' %}
+
+{{p}}{{ encrypted_boot_volume_pillar_sls }}:
+  file.managed:
+    - name: {{ encrypted_boot_volume_pillar_sls }}
+    - user: root
+    - group: root
+    - mode: 640
+    - replace: false
+    - contents: |
+        {{ '{#- ' + salt_warning + '-#}' }}
+        activate-encrypted-boot: true
+        notify-user: {{ yaml_string(salt['cmd.run']('id -nu 1000')) }}
+
+
+{{p}}{{ encrypted_boot_volume_pillar_top }}:
+  file.managed:
+    - name: {{ encrypted_boot_volume_pillar_top }}
+    - user: root
+    - group: root
+    - mode: 640
+    - replace: false
+    - contents: |
+        {{ '{#- ' + salt_warning + '-#}' }}
+        user:
+          dom0:
+            - {{ salt_pillar_base_filename }}
+
+  {%- if not is_activated %}
+{{p}} How to use:
+  test.show_notification:
+    - name: "Encrypted boot volume is not activated."
+    - order: last
+    - text: |
+        To activate it, execute the following:
+        qubesctl top.enable {{ salt_pillar_base_filename }} pillar=True
+  {%- endif %}
+
+{{p}}{{ update_fstab }}:
+  {%- if is_activated %}
+  file.comment:
+  {%- else %}
+  file.uncomment:
+  {%- endif %}
+    - name: /etc/fstab
+    - regex: ^[^#\s]+\s+/boot(/efi)?\s+
+    - char: {{ yaml_string(comment_prefix + ' ') }}
+
+{{p}}{{ boot_sync_failed_service_path }}:
+  {%- if notify_failure_to_user == none %}
+  file.absent:
+    - name: {{ boot_sync_failed_service_path }}
+  {%- else %}
+  file.managed:
+    - name: {{ boot_sync_failed_service_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - replace: true
+    - contents: |
+        [Unit]
+        Description=Notify the user about boot disk being full
+        Requires=graphical.target
+        After=graphical.target
+        RefuseManualStart=true
+        StopWhenUnneeded=true
+
+        [Service]
+        Type=oneshot
+        Environment="DISPLAY=:0"
+        Environment="FULL_BOOT_PATH=%I"
+        ExecStart={%- call systemd_shell() %}
+            user={{ bash_argument(notify_failure_to_user, before='', after='') }}
+            uid="$(id -u "$user")"
+            xauth="$(realpath -- ~$user/.Xauthority)"
+            dbus="/run/user/$uid/bus"
+            export DBUS_SESSION_BUS_ADDRESS=""
+            function userdo() {
+                sudo XAUTHORITY="$xauth" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" -u "$user" "$@"
+            }
+            if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to /boot")" == "explore" ]; then
+                userdo xdg-open "/boot/$FULL_BOOT_PATH"
+            fi
+        {%- endcall %}
+  {%- endif %}
 
 {{p}}{{ boot_watcher_service_path }}:
-  {%- if boot_partition == none %}
+  {%- if not is_activated %}
   file.absent:
     - name: {{ boot_watcher_service_path }}
-    - require:
-        - service: {{p}}{{ disable_systemd_service }}
   {%- else %}
   file.managed:
     - name: {{ boot_watcher_service_path }}
@@ -54,72 +149,44 @@
     - contents: |
         [Unit]
         Description=Sync files from /boot to plain text devices
-        Requires={{ boot_watcher_initial_scanner_service("-") }}
-        Before={{ boot_watcher_initial_scanner_service("-") }}
-        
+        Requires={{ boot_sync_service("-") }} local-fs.target
+        After=local-fs.target
+        Before={{ boot_sync_service("-") }}
+
         [Service]
         Type=forking
-        # TODO: Mount boot and EFI here
+        Environment={{ systemd_string("BOOT_SHADOW=" + boot_shadow) }}
         ExecStart={%- call systemd_shell() %}
-          mkdir {{ boot_shadow }}
-          mount -t {{ bash_argument(boot_partition.type) }} -o {{ bash_argument(boot_partition.options) }} {{ bash_argument(boot_partition.source) }} {{ boot_shadow }}
-          {%- if boot_efi_partition != none %}
-          mkdir {{ boot_shadow }}/efi
-          mount -t {{ bash_argument(boot_efi_partition.type) }} -o {{ bash_argument(boot_efi_partition.options) }} {{ bash_argument(boot_efi_partition.source) }} {{ boot_shadow }}/efi
-          {%- endif %}
-          tail -f /dev/null & ln -s "/proc/$!" /tmp/parent
+          set -e
+          mkdir "$BOOT_SHADOW"
+          export fstab_prefix={{ bash_argument(comment_prefix, before='', after='') }}
+          boot_mount_args=$(awk '{ if ($1 == ENVIRON["fstab_prefix"] && $3 == "/boot") { print "-t " $4 " -o " $5 " " $2 } }' < /etc/fstab)
+          mount $boot_mount_args "$BOOT_SHADOW"
+          boot_efi_mount_args=$(awk '{ if ($1 == ENVIRON["fstab_prefix"] && $3 == "/boot/efi") { print "-t " $4 " -o " $5 " " $2 } }' < /etc/fstab)
+          if [ "$boot_efi_mount_args" != "" ]; then
+            efi_path="$BOOT_SHADOW/efi"
+            mkdir -p "$efi_path"
+            mount $boot_efi_mount_args "$efi_path"
+          fi
+          tail -f /dev/null & ln -s "/proc/$!" {{ proc_parent }}
         {%- endcall %}
+        ExecStartPost=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi"
+        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi"
         ProtectSystem=strict
         PrivateTmp=true
-        
+
         [Install]
         WantedBy=multi-user.target
   {%- endif %}
 
 {{p}}{{ boot_watcher_initial_scanner_service_path }}:
-  {%- if boot_partition == none %}
   file.absent:
     - name: {{ boot_watcher_initial_scanner_service_path }}
-    - require:
-        - service: {{p}}{{ disable_systemd_service }}
-  {%- else %}
-  file.managed:
-    - name: {{ boot_watcher_initial_scanner_service_path }}
-    - user: root
-    - group: root
-    - mode: 444
-    - replace: true
-    - contents: |
-        [Unit]
-        Description=Scan for paths to monitor in /boot/%I
-        StartLimitBurst=0
-        Requires={{ boot_sync_path("%i") }} {{ boot_watcher_service }}
-        Before={{ boot_sync_path("%i") }}
-        After={{ boot_watcher_service }}
-        
-        [Service]
-        Type=oneshot
-        WorkingDirectory=/boot/%I
-        ExecStart={%- call systemd_shell() %}
-          for dir in *; do
-              if [ -d "$dir" ]; then
-                  boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$dir")")
-                  systemctl start "{{ boot_watcher_initial_scanner_service("$boot_path") }}"
-              fi
-          done
-        {%- endcall %}
-        
-        [Install]
-        WantedBy=multi-user.target
-  {%- endif %}
-
 
 {{p}}{{ boot_sync_instance_service_path }}:
-  {%- if boot_partition == none %}
+  {%- if not is_activated %}
   file.absent:
     - name: {{ boot_sync_instance_service_path }}
-    - require:
-        - service: {{p}}{{ disable_systemd_service }}
   {%- else %}
   file.managed:
     - name: {{ boot_sync_instance_service_path }}
@@ -129,48 +196,76 @@
     - replace: true
     - contents: |
         [Unit]
-        Description=Sync files from /boot/%I to {{ boot_partition.source }}/%I
-        Requires={{ boot_watcher_service }}
+        Description=Sync files from root mount /boot/%I to boot disk
+        Requires={{ boot_watcher_service }} local-fs.target
+        Wants={{ boot_sync_path("%i") }}
         JoinsNamespaceOf={{ boot_watcher_service }}
-        
+        After=local-fs.target
+        {%- if notify_failure_to_user != none %}
+        OnFailure={{ boot_sync_failed_service("%i") }}
+        {%- endif %}
+
         [Service]
         Type=oneshot
         Environment="BOOT_DIR=%I"
-        ExecStart=nsenter --mount=/tmp/parent/ns/mnt {% call systemd_shell() %}
+        Environment={{ systemd_string("BOOT_SHADOW=" + boot_shadow) }}
+        ExecStart=nsenter --mount={{ proc_parent }}/ns/mnt {% call systemd_shell() %}
+          set -e
+          shopt -s nullglob
+          if [ $BOOT_DIR == "lost+found" ] || [ $BOOT_DIR == "efi/lost+found" ]; then
+              echo "Ignoring lost+found"
+              systemctl stop "{{ boot_sync_path("%i") }}"
+              exit
+          fi
           (
-            cd "{{ boot_shadow }}/$BOOT_DIR"
-            for target_file in *; do
-                if [ -f "$target_file" ] && [ ! -f "/boot/$BOOT_DIR/$target_file" ]; then
-                    rm $target_file
-                fi
-            done
+            if cd "/boot/$BOOT_DIR" 2>/dev/null; then
+                mkdir -p "$BOOT_SHADOW/$BOOT_DIR"
+                for source_file in * .[^.]*; do
+                    if [ -f "$source_file" ]; then
+                        if [ ! -f "$BOOT_SHADOW/$BOOT_DIR/$source_file" ]; then
+                            echo "Copying /boot/$BOOT_DIR/$source_file"
+                            cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"
+                        elif ! diff -q "$source_file" "$BOOT_SHADOW/$BOOT_DIR/$source_file" >/dev/null; then
+                            echo "Replacing /boot/$BOOT_DIR/$source_file"
+                            cp -a "$source_file" "$BOOT_SHADOW/$BOOT_DIR/"
+                        fi
+                    elif [ -d "$source_file" ]; then
+                        mkdir -p "$BOOT_SHADOW/$BOOT_DIR/$source_file"
+                        boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$source_file")" 2>/dev/null)
+                        if ! systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
+                            systemctl start --no-block "{{ boot_sync_service("$boot_path") }}"
+                        fi
+                    fi
+                done
+            fi
           )
           (
-            cd "/boot/$BOOT_DIR"
-            for source_file in *; do
-                if [ -f "$source_file" ]; then
-                    if [ ! -f "{{ boot_shadow }}/$BOOT_DIR/$source_file" ]; then
-                        cp -ua "$source_file" "{{ boot_shadow }}/$BOOT_DIR/"
-                    elif ! diff "$source_file" "{{ boot_shadow }}/$BOOT_DIR/$source_file"; then
-                        cp -a "$source_file" "{{ boot_shadow }}/$BOOT_DIR/"
+            if cd "$BOOT_SHADOW/$BOOT_DIR" 2>/dev/null; then
+                for target_file in * .[^.]*; do
+                    if [ -f "$target_file" ] && [ ! -f "/boot/$BOOT_DIR/$target_file" ]; then
+                        echo "Removing /boot/$BOOT_DIR/$target_file"
+                        rm $target_file
+                    elif [ -d "$target_file" ] && [ ! -d "/boot/$BOOT_DIR/$target_file" ]; then
+                        boot_path=$(systemd-escape --path "$(realpath --relative-to "$BOOT_SHADOW" "$target_file")" 2>/dev/null)
+                        systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
                     fi
+                done
+                if [ ! -d "/boot/$BOOT_DIR" ]; then
+                    echo "Removing /boot/$BOOT_DIR/"
+                    systemctl stop "{{ boot_sync_path("%i") }}"
+                    rmdir -- "$BOOT_SHADOW/$BOOT_DIR"
                 fi
-            done
+            fi
           )
         {%- endcall %}
         ProtectSystem=strict
         PrivateTmp=true
-        
-        [Install]
-        WantedBy=multi-user.target
   {%- endif %}
 
 {{p}}{{ boot_sync_instance_path_path }}:
-  {%- if boot_partition == none %}
+  {%- if not is_activated %}
   file.absent:
     - name: {{ boot_sync_instance_path_path }}
-    - require:
-        - service: {{p}}{{ disable_systemd_service }}
   {%- else %}
   file.managed:
     - name: {{ boot_sync_instance_path_path }}
@@ -181,20 +276,16 @@
     - contents: |
         [Unit]
         Description=Watch for changes in /boot/%I
-        Requires={{ boot_watcher_service }}
-        After={{ boot_watcher_service }}
+        Requires={{ boot_watcher_service }} local-fs.target
+        After={{ boot_watcher_service }} local-fs.target
         ConditionPathIsDirectory=/boot/%I
-        
+
         [Path]
         PathChanged=/boot/%I
-        TriggerLimitBurst=0
-        
-        [Install]
-        WantedBy=multi-user.target
   {%- endif %}
 
 {{p}}{{ grub2_mkconfig_path }}:
-  {%- if boot_partition == none %}
+  {%- if not is_activated %}
   file.absent:
     - name: {{ grub2_mkconfig_path }}
   {%- else %}
@@ -234,23 +325,31 @@
   {%- endif %}
 
 {%- call add_dependencies('daemon-reload') %}
-  {%- for file in watched_files %}
+  {%- for file in systemd_files %}
   - file: {{p}}{{ file }}
   {%- endfor %}
 {%- endcall %}
 
-  {%- if boot_partition == none %}
-{{p}}{{ disable_systemd_service }}:
+{{p}}{{ shut_down_systemd_service }}:
   service.dead:
     - name: {{ boot_watcher_service }}
+  {%- if not is_activated %}
     - enable: false
-  {%- else %}
+  {%- endif %}
+    - onchanges:
+  {%- for file in systemd_files %}
+        - file: {{p}}{{ file }}
+  {%- endfor %}
+
+
+  {%- if is_activated %}
 {{p}}{{ enable_systemd_service }}:
   service.running:
     - name: {{ boot_watcher_service }}
     - enable: true
     - require:
       - {{ trigger_as_dependency('daemon-reload') }}
+      - service: {{p}}{{ shut_down_systemd_service }}
   {%- endif %}
 
 {%- endif %}

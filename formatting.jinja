@@ -19,9 +19,9 @@
 {%- endmacro %}
 
 {%- macro systemd_string(caller='') %}
-  {{- " '" }}
+  {{- "'" }}
     {{- ((caller() if caller is callable else caller) | replace("\\", "\\\\") | replace("'", "\\'")).split('\n', maxsplit=-1) | map('trim') | select('ne', '') | join('\\n') }}
-  {{- "' " }}
+  {{- "'" }}
 {%- endmacro %}
 
 {%- macro systemd_shell(shell=none, caller='') %}
