@@ -32,9 +32,19 @@
 
 {%- set watched_files = [boot_watcher_service_path, boot_watcher_initial_scanner_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path] %}
 
-{%- set enable_systemd_service = "Enable systemd service" %}
+{%- set enable_systemd_service = "Enable service " + boot_watcher_service %}
+{%- set disable_systemd_service = "Disable service " + boot_watcher_service %}
+
+{%- set boot_partition = salt['pillar.get']('partition:boot', none) %}
+{%- set boot_efi_partition = salt['pillar.get']('partition:boot_efi', none) %}
 
 {{p}}{{ boot_watcher_service_path }}:
+  {%- if boot_partition == none %}
+  file.absent:
+    - name: {{ boot_watcher_service_path }}
+    - require:
+        - service: {{p}}{{ disable_systemd_service }}
+  {%- else %}
   file.managed:
     - name: {{ boot_watcher_service_path }}
     - user: root
@@ -52,9 +62,11 @@
         # TODO: Mount boot and EFI here
         ExecStart={%- call systemd_shell() %}
           mkdir {{ boot_shadow }}
-          mount -t {{ bash_argument(salt['pillar.get']('partition:boot:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot:source')) }} {{ boot_shadow }}
+          mount -t {{ bash_argument(boot_partition.type) }} -o {{ bash_argument(boot_partition.options) }} {{ bash_argument(boot_partition.source) }} {{ boot_shadow }}
+          {%- if boot_efi_partition != none %}
           mkdir {{ boot_shadow }}/efi
-          mount -t {{ bash_argument(salt['pillar.get']('partition:boot_efi:type')) }} -o {{ bash_argument(salt['pillar.get']('partition:boot_efi:options')) }} {{ bash_argument(salt['pillar.get']('partition:boot_efi:source')) }} {{ boot_shadow }}/efi
+          mount -t {{ bash_argument(boot_efi_partition.type) }} -o {{ bash_argument(boot_efi_partition.options) }} {{ bash_argument(boot_efi_partition.source) }} {{ boot_shadow }}/efi
+          {%- endif %}
           tail -f /dev/null & ln -s "/proc/$!" /tmp/parent
         {%- endcall %}
         ProtectSystem=strict
@@ -62,8 +74,15 @@
         
         [Install]
         WantedBy=multi-user.target
+  {%- endif %}
 
 {{p}}{{ boot_watcher_initial_scanner_service_path }}:
+  {%- if boot_partition == none %}
+  file.absent:
+    - name: {{ boot_watcher_initial_scanner_service_path }}
+    - require:
+        - service: {{p}}{{ disable_systemd_service }}
+  {%- else %}
   file.managed:
     - name: {{ boot_watcher_initial_scanner_service_path }}
     - user: root
@@ -72,7 +91,7 @@
     - replace: true
     - contents: |
         [Unit]
-        Description=Sync files from /boot/%I to /not_boot/%I
+        Description=Scan for paths to monitor in /boot/%I
         StartLimitBurst=0
         Requires={{ boot_sync_path("%i") }} {{ boot_watcher_service }}
         Before={{ boot_sync_path("%i") }}
@@ -92,9 +111,16 @@
         
         [Install]
         WantedBy=multi-user.target
+  {%- endif %}
 
 
 {{p}}{{ boot_sync_instance_service_path }}:
+  {%- if boot_partition == none %}
+  file.absent:
+    - name: {{ boot_sync_instance_service_path }}
+    - require:
+        - service: {{p}}{{ disable_systemd_service }}
+  {%- else %}
   file.managed:
     - name: {{ boot_sync_instance_service_path }}
     - user: root
@@ -103,7 +129,7 @@
     - replace: true
     - contents: |
         [Unit]
-        Description=Detect when /boot/%I changes
+        Description=Sync files from /boot/%I to {{ boot_partition.source }}/%I
         Requires={{ boot_watcher_service }}
         JoinsNamespaceOf={{ boot_watcher_service }}
         
@@ -137,8 +163,15 @@
         
         [Install]
         WantedBy=multi-user.target
+  {%- endif %}
 
 {{p}}{{ boot_sync_instance_path_path }}:
+  {%- if boot_partition == none %}
+  file.absent:
+    - name: {{ boot_sync_instance_path_path }}
+    - require:
+        - service: {{p}}{{ disable_systemd_service }}
+  {%- else %}
   file.managed:
     - name: {{ boot_sync_instance_path_path }}
     - user: root
@@ -158,8 +191,13 @@
         
         [Install]
         WantedBy=multi-user.target
+  {%- endif %}
 
 {{p}}{{ grub2_mkconfig_path }}:
+  {%- if boot_partition == none %}
+  file.absent:
+    - name: {{ grub2_mkconfig_path }}
+  {%- else %}
   file.managed:
     - name: {{ grub2_mkconfig_path }}
     - user: root
@@ -193,6 +231,7 @@
             cat < /tmp/grub.cfg >&5
           {%- endcall %}
         {%- endcall %}
+  {%- endif %}
 
 {%- call add_dependencies('daemon-reload') %}
   {%- for file in watched_files %}
@@ -200,11 +239,18 @@
   {%- endfor %}
 {%- endcall %}
 
+  {%- if boot_partition == none %}
+{{p}}{{ disable_systemd_service }}:
+  service.dead:
+    - name: {{ boot_watcher_service }}
+    - enable: false
+  {%- else %}
 {{p}}{{ enable_systemd_service }}:
   service.running:
     - name: {{ boot_watcher_service }}
     - enable: true
     - require:
       - {{ trigger_as_dependency('daemon-reload') }}
+  {%- endif %}
 
 {%- endif %}
