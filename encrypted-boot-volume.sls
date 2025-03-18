@@ -119,18 +119,19 @@
         [Service]
         Type=oneshot
         Environment="DISPLAY=:0"
-        Environment="FULL_BOOT_PATH=%I"
+        Environment="FULL_BOOT_PATH=/boot/%I"
         ExecStart={%- call systemd_shell() %}
             user={{ bash_argument(notify_failure_to_user, before='', after='') }}
             uid="$(id -u "$user")"
             xauth="$(realpath -- ~$user/.Xauthority)"
             dbus="/run/user/$uid/bus"
             export DBUS_SESSION_BUS_ADDRESS=""
+            boot_path=$(realpath -- "$FULL_BOOT_PATH" 2>/dev/null || cat <<< "$FULL_BOOT_PATH")
             function userdo() {
                 sudo XAUTHORITY="$xauth" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" -u "$user" "$@"
             }
-            if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to /boot")" == "explore" ]; then
-                userdo xdg-open "/boot/$FULL_BOOT_PATH"
+            if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to $boot_path")" == "explore" ]; then
+                userdo xdg-open "$FULL_BOOT_PATH"
             fi
         {%- endcall %}
   {%- endif %}
