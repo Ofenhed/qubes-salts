@@ -61,8 +61,6 @@
     - contents: |
         {{ '{#- ' + salt_warning + '-#}' }}
         activate-encrypted-boot: true
-        notify-user: {{ yaml_string(salt['cmd.run']('id -nu 1000')) }}
-
 
 {{p}}{{ encrypted_boot_volume_pillar_top }}:
   file.managed:
@@ -98,10 +96,6 @@
     - char: {{ yaml_string(comment_prefix + ' ') }}
 
 {{p}}{{ boot_sync_failed_service_path }}:
-  {%- if notify_failure_to_user == none %}
-  file.absent:
-    - name: {{ boot_sync_failed_service_path }}
-  {%- else %}
   file.managed:
     - name: {{ boot_sync_failed_service_path }}
     - user: root
@@ -121,20 +115,25 @@
         Environment="DISPLAY=:0"
         Environment="FULL_BOOT_PATH=/boot/%I"
         ExecStart={%- call systemd_shell() %}
-            user={{ bash_argument(notify_failure_to_user, before='', after='') }}
-            uid="$(id -u "$user")"
-            xauth="$(realpath -- ~$user/.Xauthority)"
-            dbus="/run/user/$uid/bus"
-            export DBUS_SESSION_BUS_ADDRESS=""
-            boot_path=$(realpath -- "$FULL_BOOT_PATH" 2>/dev/null || cat <<< "$FULL_BOOT_PATH")
-            function userdo() {
-                sudo XAUTHORITY="$xauth" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" -u "$user" "$@"
-            }
-            if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to $boot_path")" == "explore" ]; then
-                userdo xdg-open "$FULL_BOOT_PATH"
-            fi
+            users="$(who | awk '{ print $1 }' | sort -u)"
+            for user in $(who | awk '{ print $1 }' | sort -u); do
+            (
+                set -e
+                uid="$(id -u "$user")"
+                dbus="/run/user/$uid/bus"
+                set +e
+                boot_path=$(realpath -- "$FULL_BOOT_PATH" 2>/dev/null || cat <<< "$FULL_BOOT_PATH")
+                set -e
+                function userdo() {
+                    sudo DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" -u "$user" "$@"
+                }
+                if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to $boot_path")" == "explore" ]; then
+                    userdo xdg-open "$FULL_BOOT_PATH"
+                fi
+            ) &
+            done
+            wait
         {%- endcall %}
-  {%- endif %}
 
 {{p}}{{ boot_watcher_service_path }}:
   {%- if not is_activated %}
@@ -202,9 +201,7 @@
         Wants={{ boot_sync_path("%i") }}
         JoinsNamespaceOf={{ boot_watcher_service }}
         After=local-fs.target
-        {%- if notify_failure_to_user != none %}
         OnFailure={{ boot_sync_failed_service("%i") }}
-        {%- endif %}
 
         [Service]
         Type=oneshot
