@@ -16,7 +16,7 @@
   {{- boot_sync_unit_name(name) }}.path
 {%- endmacro %}
 
-{%- macro boot_watcher_initial_scanner_service(name) -%}
+{%- macro boot_sync_initial_scanner_service(name) -%}
   boot-watcher-init@{{ name }}.service
 {%- endmacro %}
 
@@ -26,7 +26,7 @@
 
 {%- set systemd_path = "/usr/lib/systemd/system" %}
 {%- set boot_watcher_service = "boot-watcher.service" %}
-{%- set boot_watcher_initial_scanner_service_path = systemd_path + "/" + boot_watcher_initial_scanner_service("") %}
+{%- set boot_sync_initial_scanner_service_path = systemd_path + "/" + boot_sync_initial_scanner_service("") %}
 {%- set boot_watcher_service_path = systemd_path + "/" + boot_watcher_service %}
 {%- set boot_sync_instance_service_path = systemd_path + "/" + boot_sync_service("") %}
 {%- set boot_sync_instance_path_path = systemd_path + "/" + boot_sync_path("") %}
@@ -179,9 +179,9 @@
         WantedBy=multi-user.target
   {%- endif %}
 
-{{p}}{{ boot_watcher_initial_scanner_service_path }}:
+{{p}}{{ boot_sync_initial_scanner_service_path }}:
   file.absent:
-    - name: {{ boot_watcher_initial_scanner_service_path }}
+    - name: {{ boot_sync_initial_scanner_service_path }}
 
 {{p}}{{ boot_sync_instance_service_path }}:
   {%- if not is_activated %}
@@ -249,7 +249,9 @@
                       rm $target_file
                   elif [ -d "$target_file" ] && [ ! -d "/boot/$BOOT_DIR/$target_file" ]; then
                       boot_path=$(systemd-escape --path "$(realpath --relative-to "$BOOT_SHADOW" "$target_file")" 2>/dev/null)
-                      systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
+                      if systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
+                          systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
+                      fi
                   fi
               done
               if [ ! -d "/boot/$BOOT_DIR" ]; then
