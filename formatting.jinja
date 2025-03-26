@@ -1,6 +1,6 @@
 {%- macro escape_bash(caller='', before='', after='') %}
   {{- before + "'" }}
-    {{- ((caller() if caller is callable else caller) | replace("\\", "\\\\") | replace("'", "'\"'\"'")) }}
+    {{- ((caller() if caller is callable else caller) | replace("'", "'\"'\"'")) }}
   {{- "'" + after }}
 {%- endmacro %}
 
