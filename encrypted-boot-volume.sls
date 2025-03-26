@@ -200,7 +200,7 @@
         Requires={{ boot_watcher_service }} local-fs.target
         Wants={{ boot_sync_path("%i") }}
         JoinsNamespaceOf={{ boot_watcher_service }}
-        After=local-fs.target
+        After=local-fs.target {{ boot_watcher_service }}
         OnFailure={{ boot_sync_failed_service("%i") }}
 
         [Service]
@@ -281,7 +281,8 @@
         [Unit]
         Description=Watch for changes in /boot/%I
         Requires={{ boot_watcher_service }} local-fs.target
-        After={{ boot_watcher_service }} local-fs.target
+        After=local-fs.target
+        Before={{ boot_watcher_service }}
         ConditionPathIsDirectory=/boot/%I
 
         [Path]
