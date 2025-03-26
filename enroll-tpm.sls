@@ -6,11 +6,11 @@
 Generate systemd-cryptencroll-all-tpm:
   file.managed:
     - name: /usr/local/sbin/systemd-cryptenroll-all-tpm
-      user: root
-      group: root
-      mode: 755
-      replace: True
-      contents: |
+    - user: root
+    - group: root
+    - mode: 755
+    - replace: True
+    - contents: |
         #!/bin/bash
         # {{ salt_warning }}
         tpm2_devices=$(awk '$4 ~ /(^|,)tpm2-device=/ { print $2 }' < /etc/crypttab)
