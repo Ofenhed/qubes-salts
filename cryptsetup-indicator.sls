@@ -54,22 +54,31 @@
     {%- endif %}
     echo 'SUBSYSTEM!="block", GOTO="not_in_crypttab"' >> {{ rules_file }}
     echo 'ACTION=="remove", GOTO="not_in_crypttab"' >> {{ rules_file }}
+    counter=0
+    crypttab_label_rule() {
+        cat <<< "crypttab_label_not_rule_$1"
+    }
     while IFS="" read -r line || [ -n "$line" ]; do
         luks_name=$(awk '{ print $1 }' <<< "$line")
         luks_systemd_name=$(systemd-escape -- "$luks_name")
         luks_udev_name="${luks_systemd_name//\\/\\\\}"
+        luks_udev_name="${luks_udev_name//\"/\\\"}"
 
         source_dev=$(awk {{ awk_arg_get_crypttab_source() }} <<< "$line")
-        source_systemd_dev=$(systemd-escape -- "${source_dev#/}")
+        source_systemd_dev=$(systemd-escape -p -- "$source_dev")
 
-        {%- if initdir %}
-        {%- endif %}
+        counter=$((counter+1))
+        echo
+        echo "ENV{DEVLINKS}!=\"*${source_dev}*\", GOTO=\"$(crypttab_label_rule $counter)\""
+
         for prefix in '* ' ''; do
             for suffix in ' *' ''; do
                 echo "ENV{DEVLINKS}==\"$prefix$source_dev$suffix\", TAG+=\"systemd\", ENV{SYSTEMD_WANTS}+=\"{{ service_name('$luks_udev_name') }}\""
             done
-        done >> {{ rules_file }}
-    done < {{ '$initdir' if initdir else '' }}/etc/crypttab
+        done
+
+        echo "LABEL=\"$(crypttab_label_rule $counter)\""
+    done < {{ '$initdir' if initdir else '' }}/etc/crypttab >> {{ rules_file }}
     echo 'LABEL="not_in_crypttab"' >> {{ rules_file }}
     {%- if initdir %}
         inst_rules "$rules_file"
@@ -126,7 +135,6 @@
         # Install the required file(s) and directories for the module in the initramfs.
         install() {
             # Install required libraries.
-            inst "$moddir/{{ change_name_script_name }}" {{ target_change_name_script_path }}
             inst "$moddir/{{ service_name() }}" "{{ systemd_dir }}/{{ service_name() }}"
             if [ $hostonly ]; then
                 {{ init_script(True) | indent(16) }}
@@ -134,39 +142,6 @@
                 inst_hook pre-udev 90 "$moddir/{{ init_script_name }}"
             fi
         }
-
-{{p}}rename_script: 
-  file.managed:
-    - name: {{ mod_dir }}/{{ change_name_script_name }}
-    - user: root
-    - group: root
-    - mode: 555
-    - replace: true
-    - require:
-      - file: {{ mod_dir }}
-    - contents: |
-        #!/bin/sh
-        # {{ salt_warning }}
-
-        dev_name="$1"
-        strip_tag="$2"
-        cryptsetup_dump=$(cryptsetup luksDump "$dev_name")
-        label=$(echo -n $(awk '/^Label:[0-9a-zA-Z(),\- \t]+$/ { $1=""; print $0 }' <<< "$cryptsetup_dump"))
-        if [[ $label != "" ]] && [[ $label != "(no label)" ]]; then
-            echo "SUBSYSTEM==\"block\", ACTION==\"change\", ENV{DEVNAME}==\"$dev_name\", ENV{ID_PART_ENTRY_NAME}=\"$label\"" >> /etc/udev/rules.d/99-rename-encrypted-disks.rules
-            grep -vF "$strip_tag" < {{ udev_rule_prepare }} > {{ udev_rule_prepare }}.new
-            mv {{ udev_rule_prepare }}.new {{ udev_rule_prepare }}
-            udevadm control --reload
-            udevadm trigger --name-match="$dev_name"
-        else
-            echo "# $dev_name does not have a label specified, ignoring" >> /etc/udev/rules.d/99-rename-encrypted-disks.rules
-            mkdir -p /var/log/
-            cat <<< "$cryptsetup_dump" >> /var/log/rename-failed.txt
-        fi
-
-{#
-luks-04f935b5-17ba-4a25-be2b-fb88722fea70 /home/user/testdisk none discard,force,header=/home/user/testuser,password-cache=no
-#}
 
 {{p}}service:
   file.managed:
@@ -242,35 +217,9 @@ luks-04f935b5-17ba-4a25-be2b-fb88722fea70 /home/user/testdisk none discard,force
     - contents: |
         #!/bin/sh
         # {{ salt_warning }}
-        set -e
-        
-        awk_script=$(cat << EOF
-        {
-            if (match(\$4, /(^|,)header=([^,]+)(\$|,)/, m)) {
-                header_device=m[2]
-            } else {
-                header_device=\$2
-            }
-            do_print=1;
-            if (match(header_device, /^\/dev\/mapper\/([0-9a-zA-Z(),\-]+)\$/, mapper_dev)) {
-                udev_match="ENV{DM_NAME}==\"" mapper_dev[1] "\", ";
-            } else if (match(header_device, /^(UUID=|\/dev\/disk\/by-uuid\/)([0-9a-zA-Z\-]+)\$/, mapper_dev)) {
-                udev_match="ENV{ID_FS_UUID}==\"" mapper_dev[2] "\", ";
-            } else {
-                print "# Invalid header: " header_device;
-                do_print=0;
-            }
-            if (do_print > 0) {
-                print "SUBSYSTEM==\"block\", ACTION!=\"remove\"," udev_match " RUN+=\"{{ target_change_name_script_path }} \$env{DEVNAME} tag_for_removal" NR "\"";
-            }
-        }
-        EOF
-        )
-
         {{ init_script(False) | indent(8) }}
 
 {% call add_dependencies('dracut') %}
-  - file: {{p}}rename_script
   - file: {{p}}service
   - file: {{p}}hook
   - file: {{p}}setup
