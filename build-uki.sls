@@ -8,6 +8,7 @@
 {%- set tmp_dir = salt['temp.dir']() %}
 {%- set tmp_xen_verification_output = tmp_dir + '/xen_verification' %}
 {%- set tmp_kernel_verification_output = tmp_dir + '/kernel_verification' %}
+{%- set tmp_current_kernel_output = tmp_dir + '/kernel_version' %}
 {%- set tmp_uki_config_file = tmp_dir + '/uki.conf' %}
 {%- set tmp_current_elf = tmp_dir + '/current.elf' %}
 {%- set tmp_initrd_image = tmp_dir + '/initrd.img' %}
@@ -69,6 +70,7 @@
             {%- endfor %}
             fi
           done
+          awk '{ print $2 }' < {{ bash_argument(tmp_kernel_verification_output) }} | sort -rV | head -n 1 | tee {{ bash_argument(tmp_current_kernel_output) }}
       {%- endcall %}
 
 {{p}}{{ create_dracut_image }}:
@@ -82,7 +84,7 @@
           exit 1
           {%- else %}
           {%- do build_command.pop(0) %}
-          kernel_image=$(awk '{ print $2 }' < {{ bash_argument(tmp_kernel_verification_output) }} | sort -rh | head -n 1)
+          kernel_image=$(cat < {{ bash_argument(tmp_current_kernel_output) }})
           build_command='dracut '{{ bash_argument(tmp_initrd_image, before='', after='') }}
           {%- for argument in build_command %}
             {{- bash_argument(argument, before="' '", after='') }}
@@ -132,7 +134,7 @@
       - CREATE_UKI: {% call yaml_string() %}
           set -e
           xen_image=$(awk '{ print $2 }' < {{ bash_argument(tmp_xen_verification_output) }})
-          kernel_image=$(awk '{ print $2 }' < {{ bash_argument(tmp_kernel_verification_output) }} | sort -rh | head -n 1)
+          kernel_image=$(cat < {{ bash_argument(tmp_current_kernel_output) }})
           echo initrd: {{ bash_argument(tmp_initrd_image) }}
           uki_generate_args=()
           {%- if "AMD" in grains['cpu_model'] %}
