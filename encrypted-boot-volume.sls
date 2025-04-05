@@ -16,6 +16,10 @@
   {{- boot_sync_unit_name(name) }}.path
 {%- endmacro %}
 
+{%- macro boot_sync_restart_service(name) -%}
+  restart-{{- boot_sync_unit_name(name) }}.service
+{%- endmacro %}
+
 {%- macro boot_sync_initial_scanner_service(name) -%}
   boot-watcher-init@{{ name }}.service
 {%- endmacro %}
@@ -29,6 +33,7 @@
 {%- set boot_sync_initial_scanner_service_path = systemd_path + "/" + boot_sync_initial_scanner_service("") %}
 {%- set boot_watcher_service_path = systemd_path + "/" + boot_watcher_service %}
 {%- set boot_sync_instance_service_path = systemd_path + "/" + boot_sync_service("") %}
+{%- set boot_sync_instance_restart_service_path = systemd_path + "/" + boot_sync_restart_service("") %}
 {%- set boot_sync_instance_path_path = systemd_path + "/" + boot_sync_path("") %}
 {%- set boot_sync_failed_service_path = systemd_path + "/" + boot_sync_failed_service('') %}
 {%- set grub2_mkconfig_path = "/usr/local/sbin/grub2-mkconfig" %}
@@ -42,7 +47,7 @@
 {%- set boot_shadow = '/tmp/boot_shadow' %}
 {%- set proc_parent = '/tmp/parent' %}
 
-{%- set systemd_files = [boot_watcher_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path, boot_sync_failed_service_path] %}
+{%- set systemd_files = [boot_watcher_service_path, boot_sync_instance_service_path, boot_sync_instance_path_path, boot_sync_failed_service_path, boot_sync_instance_restart_service_path] %}
 
 {%- set enable_systemd_service = "Enable service " + boot_watcher_service %}
 {%- set shut_down_systemd_service = "Shut down service " + boot_watcher_service %}
@@ -168,10 +173,10 @@
             mkdir -p "$efi_path"
             mount $boot_efi_mount_args "$efi_path"
           fi
-          tail -f /dev/null & ln -s "/proc/$!" {{ proc_parent }}
+          sleep infinity & ln -s "/proc/$!" {{ proc_parent }}
         {%- endcall %}
-        ExecStartPost=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi"
-        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi"
+        ExecStartPost=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi/"
+        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi/"
         ProtectSystem=strict
         PrivateTmp=true
 
@@ -182,6 +187,28 @@
 {{p}}{{ boot_sync_initial_scanner_service_path }}:
   file.absent:
     - name: {{ boot_sync_initial_scanner_service_path }}
+
+{{p}}{{ boot_sync_instance_restart_service_path }}:
+  {%- if not is_activated %}
+  file.absent:
+    - name: {{ boot_sync_instance_restart_service_path }}
+  {%- else %}
+  file.managed:
+    - name: {{ boot_sync_instance_restart_service_path }}
+    - user: root
+    - group: root
+    - mode: 444
+    - replace: true
+    - contents: |
+        [Unit]
+        Description=Restart {{ boot_sync_service("%i") }}
+        Conflicts={{ boot_sync_service("%i") }}
+
+        [Service]
+        Type=oneshot
+        ExecStart=sleep 1
+        ExecStopPost=systemctl start {{ boot_sync_service("%i") }}
+  {%- endif %}
 
 {{p}}{{ boot_sync_instance_service_path }}:
   {%- if not is_activated %}
@@ -204,7 +231,7 @@
         OnFailure={{ boot_sync_failed_service("%i") }}
 
         [Service]
-        Type=oneshot
+        Type=notify
         Environment="BOOT_DIR=%I"
         Environment={{ systemd_string("BOOT_SHADOW=" + boot_shadow) }}
         ExecStart=nsenter --mount={{ proc_parent }}/ns/mnt {% call systemd_shell() %}
@@ -212,9 +239,26 @@
           shopt -s nullglob
           if [ $BOOT_DIR == "lost+found" ] || [ $BOOT_DIR == "efi/lost+found" ]; then
               echo "Ignoring lost+found"
+              systemctl mask "{{ boot_sync_path("%i") }}" "{{ boot_sync_service("%i") }}"
               systemctl stop "{{ boot_sync_path("%i") }}"
+              systemd-notify --ready
               exit
           fi
+          if cd "/boot/$BOOT_DIR" 2>/dev/null; then
+              for source_file in * .[^.]*; do
+                  if [ -d "$source_file" ]; then
+                      mkdir -p "$BOOT_SHADOW/$BOOT_DIR/$source_file"
+                      boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$source_file")" 2>/dev/null)
+                      systemctl start --no-block "{{ boot_sync_service("$boot_path") }}" || true
+                  fi
+              done
+              systemd-notify --ready
+              exec sleep infinity
+          fi
+        {%- endcall %}
+        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt {% call systemd_shell() %}
+          set -e
+          shopt -s nullglob
           result=0
           if cd "/boot/$BOOT_DIR" 2>/dev/null; then
               mkdir -p "$BOOT_SHADOW/$BOOT_DIR"
@@ -233,12 +277,6 @@
                               result=1
                           fi
                       fi
-                  elif [ -d "$source_file" ]; then
-                      mkdir -p "$BOOT_SHADOW/$BOOT_DIR/$source_file"
-                      boot_path=$(systemd-escape --path "$(realpath --relative-to "/boot" "$source_file")" 2>/dev/null)
-                      if ! systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
-                          systemctl start --no-block "{{ boot_sync_service("$boot_path") }}"
-                      fi
                   fi
               done
           fi
@@ -249,9 +287,8 @@
                       rm $target_file
                   elif [ -d "$target_file" ] && [ ! -d "/boot/$BOOT_DIR/$target_file" ]; then
                       boot_path=$(systemd-escape --path "$(realpath --relative-to "$BOOT_SHADOW" "$target_file")" 2>/dev/null)
-                      if systemctl is-active "{{ boot_sync_path("$boot_path") }}" >/dev/null; then
-                          systemctl start --wait "{{ boot_sync_service("$boot_path") }}"
-                      fi
+                      systemctl start --wait "{{ boot_sync_service("$boot_path") }}" || true
+                      systemctl stop --wait "{{ boot_sync_service("$boot_path") }}"
                   fi
               done
               if [ ! -d "/boot/$BOOT_DIR" ]; then
@@ -287,6 +324,8 @@
 
         [Path]
         PathChanged=/boot/%I
+        Unit={{ boot_sync_restart_service("%i") }}
+        TriggerLimitIntervalSec=0
   {%- endif %}
 
 {{p}}{{ grub2_mkconfig_path }}:
