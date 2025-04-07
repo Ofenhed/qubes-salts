@@ -18,17 +18,15 @@
     - template: {{ salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()) }}
     - include-in-backups: false
     - class: AppVM
-    {%- if for_disposable %}
+
+    {%- if not for_disposable %}
+    - template_for_dispvms: false
+
+    {%- else %}
     - template_for_dispvms: true
     - provides-network: false
     - netvm: none
-    {%- else %}
-    - template_for_dispvms: false
-    - provides-network: true
-    - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
-    {%- endif %}
 
-    {%- if for_disposable %}
 {{ vm }} dvm preferences:
   qvm.vm:
   - name: {{ vm }}-dvm
@@ -37,9 +35,12 @@
     - template: sys-wireguard-{{ if_name }}
     - include-in-backups: false
     - class: DispVM
-    - provides-network: true
-    - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
     {%- endif %}
+    - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
+    - provides-network: true
+    - features:
+        - enable:
+            - qubes-firewall
 
   {%- endfor %}
 {%- else %}
@@ -221,7 +222,63 @@
       {%- endif %}
     {%- endfor %}
 
-/rw/config/qubes-firewall.d/10-wireguard.nft:
+{%- set dynamic_forward_chain = "dynamic-forward" %}
+{%- set wireguard_table = "wireguard-tunnel" %}
+
+/rw/config/qubes-firewall.d/49a-general-forward.nft:
+  file.managed:
+    - user: root
+    - group: systemd-network
+    - mode: 550
+    - dir_mode: 555
+    - makedirs: true
+    - replace: true
+    - contents: |
+         #!/usr/sbin/nft -f
+         # {{ salt_warning }}
+         {%- if redirect_dns %}
+           {%- for ip in ["ip", "ip6"] %}
+         create chain {{ip}} qubes-firewall {{ dynamic_forward_chain }}
+         add rule {{ip}} qubes-firewall forward jump {{ dynamic_forward_chain }}
+         rename chain {{ip}} qubes-firewall forward forward-hook
+           {%- endfor %}
+         {%- endif %}
+
+/rw/config/qubes-firewall.d/49b-general-forward.nft:
+  file.managed:
+    - user: root
+    - group: systemd-network
+    - mode: 550
+    - dir_mode: 555
+    - makedirs: true
+    - replace: true
+    - contents: |
+         #!/usr/sbin/nft -f
+         # {{ salt_warning }}
+         {%- if redirect_dns %}
+           {%- for ip in ["ip", "ip6"] %}
+         rename chain {{ip}} qubes-firewall {{ dynamic_forward_chain }} forward
+           {%- endfor %}
+         {%- endif %}
+
+/rw/config/qubes-firewall.d/10-wireguard-failsafe.nft:
+  file.managed:
+    - user: root
+    - group: systemd-network
+    - mode: 550
+    - dir_mode: 555
+    - makedirs: true
+    - replace: true
+    - contents: |
+         #!/usr/sbin/nft -f
+         # {{ salt_warning }}
+         table inet {{ wireguard_table }} {
+           chain init_failed {
+             type nat hook prerouting priority dstnat - 10; policy drop;
+           }
+         }
+
+/rw/config/qubes-firewall.d/50-wireguard.nft:
   file.managed:
     - user: root
     - group: systemd-network
@@ -238,11 +295,20 @@
              ct mark {{ dns_mark }} accept
            }
          }
+         chain ip qubes-firewall input-with-forward-rules
+         delete chain ip qubes-firewall input-with-forward-rules
+         table ip qubes-firewall {
+           chain test-dns-forward-rules-early {
+             type nat hook prerouting priority dstnat - 10; policy accept;
+             iifgroup 2 ip daddr { {{ qubes_dns_servers | join(', ') }} } meta l4proto {tcp, udp} th dport domain ct mark set {{ dns_mark }} counter jump forward
+           }
+         }
+
          {%- endif %}
-         table inet wireguard_tunnel
-         delete table inet wireguard_tunnel
-         table inet wireguard_tunnel {
-           chain only_forward_with_wireguard {
+         table inet {{ wireguard_table }}
+         delete table inet {{ wireguard_table }}
+         table inet {{ wireguard_table }} {
+           chain only-forward-with-wireguard {
              type filter hook forward priority filter;
     {%- if allow_forward_to_wan %}
              # Forward traffic from the VPN
@@ -256,14 +322,14 @@
            }
 
     {%- if redirect_dns %}
-           chain redirect_dns {
-               type nat hook prerouting priority dstnat - 10;
-               iifgroup 2 ip daddr { {{ qubes_dns_servers | join(', ') }} } meta l4proto {tcp, udp} th dport domain ct mark set {{ dns_mark }} counter dnat to 127.0.0.54
+           chain redirect-dns {
+             type nat hook prerouting priority dstnat - 9; policy accept;
+             ct mark {{ dns_mark }} counter dnat ip to 127.0.0.54
            }
     {%- endif %}
 
     {%- if allow_forward_to_wan %}
-           chain nat_wan_forward {
+           chain nat-wan-forward {
              type nat hook postrouting priority srcnat;
              oifgroup 1 masquerade
            }
@@ -271,9 +337,9 @@
          }
 
          table ip qubes {
-             chain custom-forward {
-                 tcp flags syn / syn,rst tcp option maxseg size set rt mtu
-             }
+           chain custom-forward {
+             tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+           }
          }
 
 /rw/config/rc.local.d/30-allow-redirect-to-localhost.rc:
