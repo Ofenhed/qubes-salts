@@ -3,8 +3,8 @@
 
 {% from "formatting.jinja" import salt_warning %}
 
-{% if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'app' %}
-/rw/config/rc.local.d/disable-root.rc:
+{% if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'app' and grains['os_family'] == 'RedHat' %}
+/rw/config/rc.local.d/10-disable-root.rc:
   file.managed:
     - user: root
     - group: root
