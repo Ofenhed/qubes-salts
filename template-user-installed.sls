@@ -32,14 +32,12 @@
         Description={{ keep_cache_for_non_template }}
         After=qubes-db.service
         Requires=qubes-db.service
+        ConditionPathExists=!/var/run/qubes/this-is-templatevm
 
         [Service]
         Type=oneshot
         ExecStart={%- call systemd_shell() %}
             gawk -i inplace '/^\[.*\]$/ {p=($0=="[main]")}; { if (!p || (p && !(/keepcache/))) print $0 ; if ($0=="[main]") print "keepcache = True" }' /etc/dnf/dnf.conf
-        {%- endcall %}
-        ExecCondition={%- call systemd_shell() %}
-          [ "$(qubesdb-read /type)" != "TemplateVM" ]
         {%- endcall %}
 
         ExecStart={%- call systemd_shell() %}
