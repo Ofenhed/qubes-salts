@@ -105,13 +105,13 @@
             [global]
             default=qubes
             [qubes]
-            options=efi=attr=uc $GRUB_CMDLINE_XEN_DEFAULT
+            options=$GRUB_CMDLINE_XEN_DEFAULT
             kernel=vmlinuz root=/dev/mapper/qubes_dom0-root $GRUB_CMDLINE_LINUX
             EOF
             {%- for (name, options) in {'qubes_debug': {'kernel': 'rd.break=initqueue'}}.items() %}
             cat <<EOF
             [{{- name -}}]
-            options=efi=attr=uc $GRUB_CMDLINE_XEN_DEFAULT
+            options=$GRUB_CMDLINE_XEN_DEFAULT
               {%- if 'options' in options %}
                 {{- " " + options['options'] }}
               {%- endif %}
