@@ -14,7 +14,7 @@
     - contents: |
         #!/bin/sh
         # {{ salt_warning }}
-        
+
         qvm-features-request supported-service.zram-swap=1
         qvm-features-request supported-service.zram-swap-disk-fallback=1
         qvm-features-request supported-feature.vm-config.zram-size=1
@@ -35,22 +35,22 @@
         {%- endif %}
         ConditionPathExists=/run/qubes-service/zram-swap
         After=local-fs.target
-        
+
         [Service]
         Type=oneshot
         ExecStart={%- call systemd_shell() %}
           # Create a swap device in RAM with the 'zram' kernel module. Copy this file to /usr/local/bin.
-          
+
           # Show supported compression algorithms...
           #  cat /sys/block/zram0/comp_algorithm
           compress="$(qubesdb-read -q /vm-config/zram-algorithm || cat <<< "lz4hc")"
-          
+
           disksize="$(qubesdb-read -q /vm-config/zram-size || cat <<< "2G")"
           priority="32767"  # give zram device highest priority
-          
+
           # Disable zswap  in order to prevent zswap intercepting memory pages being swapped out before they reach zram
           echo 0 > /sys/module/zswap/parameters/enabled
-          
+
           if [ ! -e /run/qubes/service/zram-swap-disk-fallback ]; then
             swapoff --all
           fi
@@ -66,17 +66,17 @@
         {%- endcall %}
         ExecStop={%- call systemd_shell() %}
           # Deactivate zram0 swap device in RAM. Copy this file to /usr/local/bin.
-          
+
           swapoff /dev/zram0
-          
+
           # Free already allocated memory to device, reset disksize to 0, and unload the module
           echo 1 > /sys/block/zram0/reset
-          
+
           sleep 1
           modprobe -r zram
         {%- endcall %}
         RemainAfterExit=yes
-        
+
         [Install]
         WantedBy=multi-user.target
 
