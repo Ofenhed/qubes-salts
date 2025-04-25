@@ -2,12 +2,13 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
-  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, format_exec_env_script %}
+  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script %}
   {%- set p = "Template user installed - " %}
   {%- set upgrade_all = 'Upgrade all installed packages' %}
   {%- set keep_cache_for_non_template = 'Keep dnf cache for non template VMs' %}
   {%- set enable_non_template_cache_service = 'Enable dnf caching service' %}
   {%- set keep_cache_for_non_template_service = 'keep-dnf-cache.service' %}
+  {%- set start_time_file = '/run/template-user-installed-start-time' %}
   {%- set activate_cached_file_usage_tracking = 'Activate cached file usage tracking' %}
   {%- set remove_unused_cached_files = 'Remove unused cache files' %}
   {%- set installed = 'Install user wanted packages' %}
@@ -131,9 +132,9 @@ Notify qubes about installed updates:
       - DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING: {% call yaml_string() -%}
           set -e
           mount -B -o atime /var/cache/libdnf5/{,}
-          touch /var/cache/libdnf5/*/packages/*
-          last_timestamp="$(date '+%s')"
-          while [[ "$(date '+%s')" -eq $last_timestamp ]]; do
+          touch /var/cache/libdnf5/*/packages/* {{ start_time_file }}
+          start_time=$(stat --format='%X' {{ start_time_file }})
+          while [[ $(date +%s) -eq $start_time ]]; do
               sleep 0.05
           done
         {%- endcall %}
@@ -145,7 +146,20 @@ Notify qubes about installed updates:
     - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
     - env:
       - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
-      stat --format='%X %Y %n' /var/cache/libdnf5/*/packages/* | awk '{ if ($1 == $2) { printf "%s\0", substr($0, index($0, $3)) }}' | xargs -0 -- rm -fv --
+      start_time=$(stat --format='%X' {{ start_time_file }})
+      stat --format='%X %Y %n' /var/cache/libdnf5/*/packages/* | awk -v "start_time=$start_time" {% call escape_bash() -%}
+        {
+          last_written=$1;
+          last_access=$2;
+          last_any=last_access;
+          if (last_written > last_any) {
+              last_any=last_written;
+          };
+          if (!(last_any > start_time)) {
+              printf "%s\0", substr($0, index($0, $3))
+          }
+        }
+      {%- endcall %} | xargs -0 -- rm -fv --
       umount /var/cache/libdnf5
       {%- endcall %}
     - require:
