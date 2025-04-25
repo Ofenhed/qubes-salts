@@ -8,6 +8,8 @@
   {%- set keep_cache_for_non_template = 'Keep dnf cache for non template VMs' %}
   {%- set enable_non_template_cache_service = 'Enable dnf caching service' %}
   {%- set keep_cache_for_non_template_service = 'keep-dnf-cache.service' %}
+  {%- set activate_cached_file_usage_tracking = 'Activate cached file usage tracking' %}
+  {%- set remove_unused_cached_files = 'Remove unused cache files' %}
   {%- set installed = 'Install user wanted packages' %}
   {%- set downloaded = 'Download user sometimes wanted packages' %}
   {%- set maybe_neovim = 'Neovim unless installed locally' %}
@@ -17,42 +19,15 @@
   {%- set dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41' %}
 
   {% if grains['os_family'] == 'RedHat' %}
+/usr/lib/systemd/system/{{ keep_cache_for_non_template_service }}:
+  file.absent: []
+
 {{p}}{{ keep_cache_for_non_template }}:
-  file.managed:
-    - name: /usr/lib/systemd/system/{{ keep_cache_for_non_template_service }}
-    - user: root
-    - group: root
-    - mode: 444
-    - dir_mode: 755
-    - makedirs: true
-    - replace: true
-    - contents: |
-        # {{ salt_warning }}
-        [Unit]
-        Description={{ keep_cache_for_non_template }}
-        After=qubes-db.service
-        Requires=qubes-db.service
-        ConditionPathExists=!/var/run/qubes/this-is-templatevm
-
-        [Service]
-        Type=oneshot
-        ExecStart={%- call systemd_shell() %}
-            gawk -i inplace '/^\[.*\]$/ {p=($0=="[main]")}; { if (!p || (p && !(/keepcache/))) print $0 ; if ($0=="[main]") print "keepcache = True" }' /etc/dnf/dnf.conf
-        {%- endcall %}
-
-        ExecStart={%- call systemd_shell() %}
-            wg set "$wg_if_name" peer "$wg_peer" endpoint "$wg_endpoint"
-        {%- endcall %}
-        RemainAfterExit=yes
-
-        [Install]
-        WantedBy=sysinit.target
-
-{{p}}{{ enable_non_template_cache_service }}:
-  service.enabled:
-    - name: {{ keep_cache_for_non_template_service }}
-    - require:
-      - file: {{p}}{{ keep_cache_for_non_template }}
+  cmd.run:
+    - name: {% call yaml_string() -%}
+        gawk -i inplace '/^\[.*\]$/ {p=($0=="[main]")}; { if (!p || (p && !(/keepcache/))) print $0 ; if ($0=="[main]") print "keepcache = True" }' /etc/dnf/dnf.conf
+      {%- endcall %}
+    - unless: grep '^keepcache = True$' /etc/dnf/dnf.conf
 
   {%- endif %}
 
@@ -149,11 +124,45 @@ Notify qubes about installed updates:
   {%- endfor %}
   {%- set packages_for_download = packages_for_download | unique %}
 
+{{p}}{{ activate_cached_file_usage_tracking }}:
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script('DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING')) }}
+    - env:
+      - DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING: {% call yaml_string() -%}
+          set -e
+          mount -B -o atime /var/cache/libdnf5/{,}
+          touch /var/cache/libdnf5/*/packages/*
+          last_timestamp="$(date '+%s')"
+          while [[ "$(date '+%s')" -eq $last_timestamp ]]; do
+              sleep 0.05
+          done
+          touch /var/cache/libdnf5/.cache-invalidated
+        {%- endcall %}
+    - require:
+      - pkg: {{p}}{{ installed }}
+
+{{p}}{{ remove_unused_cached_files }}:
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
+    - env:
+      - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
+      target_timestamp=$(stat --format='%X' /var/cache/libdnf5/.cache-invalidated)
+      for package in /var/cache/libdnf5/*/packages/*; do
+          package_timestamp="$(stat --format='%X' "$package")"
+          if [[ $target_timestamp -gt $package_timestamp ]]; then
+              rm -f -- "$package"
+          fi
+      done
+      rm /var/cache/libdnf5/.cache-invalidated
+      umount /var/cache/libdnf5
+      {%- endcall %}
+    - require:
+      - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
+
+
 {{p}}{{ downloaded }}:
   {%- if not dnf_workaround %}
   pkg.downloaded:
-    - require:
-      - pkg: {{p}}{{ installed }}
     - failhard: False
     - order: last
     - pkgs:
@@ -169,6 +178,14 @@ Notify qubes about installed updates:
       {{- bash_argument(package) }}
     {%- endfor %}
   {%- endif %}
+    - require:
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+      - pkg: {{p}}{{ installed }}
+  {%- if grains['os_family'] == 'RedHat' %}
+      - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
+    - require_in:
+      - cmd: {{p}}{{ remove_unused_cached_files }}
+  {%- endif %}
 
   {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
     {%- if download is not string and download['name'] is defined and download['repo'] is defined and download['repo']['name'] is defined %}
@@ -180,8 +197,6 @@ Notify qubes about installed updates:
       {%- endfor %}
       {%- if not dnf_workaround %}
   pkg.downloaded:
-    - require:
-      - pkg: {{p}}{{ installed }}
     - name: {{ yaml_string(download['name']) }}
     - enablerepo: {{ yaml_string(download['repo']['name']) }}
       {%- else %}
@@ -190,6 +205,14 @@ Notify qubes about installed updates:
     - env:
       - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} {{ bash_argument(download['name']) }}
       {%- endif %}
+    {%- endif %}
+    - require:
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+      - pkg: {{p}}{{ installed }}
+    {%- if grains['os_family'] == 'RedHat' %}
+      - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
+    - require_in:
+      - cmd: {{p}}{{ remove_unused_cached_files }}
     {%- endif %}
   {%- endfor %}
 {%- endif %}
