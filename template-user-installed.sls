@@ -136,7 +136,6 @@ Notify qubes about installed updates:
           while [[ "$(date '+%s')" -eq $last_timestamp ]]; do
               sleep 0.05
           done
-          touch /var/cache/libdnf5/.cache-invalidated
         {%- endcall %}
     - require:
       - pkg: {{p}}{{ installed }}
@@ -146,14 +145,7 @@ Notify qubes about installed updates:
     - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
     - env:
       - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
-      target_timestamp=$(stat --format='%X' /var/cache/libdnf5/.cache-invalidated)
-      for package in /var/cache/libdnf5/*/packages/*; do
-          package_timestamp="$(stat --format='%X' "$package")"
-          if [[ $target_timestamp -gt $package_timestamp ]]; then
-              rm -f -- "$package"
-          fi
-      done
-      rm /var/cache/libdnf5/.cache-invalidated
+      stat --format='%X %Y %n' /var/cache/libdnf5/*/packages/* | awk '{ if ($1 == $2) { printf "%s\0", substr($0, index($0, $3)) }}' | xargs -0 -- rm -fv --
       umount /var/cache/libdnf5
       {%- endcall %}
     - require:
