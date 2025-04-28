@@ -1,7 +1,11 @@
 {%- macro escape_bash(caller='', before='', after='') %}
-  {{- before + "'" }}
-    {{- ((caller() if caller is callable else caller) | replace("'", "'\"'\"'")) }}
-  {{- "'" + after }}
+  {{- before }}
+  {%- filter replace("''", "") %}
+    {{- "'" }}
+      {{- ((caller() if caller is callable else caller) | replace("'", "'\"'\"'")) }}
+    {{- "'" }}
+  {%- endfilter %}
+  {{- after }}
 {%- endmacro %}
 
 {%- macro bash_argument(value, before=' ', after=' ') %}
