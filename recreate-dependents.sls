@@ -6,7 +6,7 @@
   {% from "dependents.jinja" import add_dependencies, add_external_change_dependency, tasks, task_trigger_filename, task_command_filename, trigger_salt_name %}
 
 {{ add_external_change_dependency('grub', '/etc/default/grub') }}
-{%- for file in salt['file.find']('/lib/dracut/dracut.conf.d/', type='f') %}
+{%- for file in salt['file.find']('/lib/dracut/dracut.conf.d/', type='f') + salt['file.find']('/etc/dracut.conf.d/', type='f') %}
 {{ add_external_change_dependency('dracut', file) }}
 {%- endfor %}
   {%- for (name, task) in tasks.items() %}

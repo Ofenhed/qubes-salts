@@ -147,7 +147,8 @@ Notify qubes about installed updates:
     - env:
       - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
       start_time=$(stat --format='%X' {{ start_time_file }})
-      stat --format='%X %Y %n' /var/cache/libdnf5/*/packages/* | awk -v "start_time=$start_time" {% call escape_bash() -%}
+      cd /var/cache/libdnf5/
+      stat --format='%X %Y %n' ./*/packages/* | awk -v "start_time=$start_time" {% call escape_bash() -%}
         {
           last_written=$1;
           last_access=$2;
@@ -160,6 +161,7 @@ Notify qubes about installed updates:
           }
         }
       {%- endcall %} | xargs -0 -- rm -fv --
+      cd /
       umount /var/cache/libdnf5
       {%- endcall %}
     - require:
