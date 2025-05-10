@@ -196,8 +196,6 @@
                 udevadm trigger --name-match="$disk_device" || true
             else
                 echo "# $SERVICE_LUKS_TARGET does not have a label specified, ignoring" >> /etc/udev/rules.d/99-rename-encrypted-disks.rules
-                mkdir -p /var/log/
-                cat <<< "$cryptsetup_dump" >> /var/log/rename-failed.txt
             fi
         {%- endcall %}
         
