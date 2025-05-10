@@ -105,10 +105,10 @@
             [global]
             default=qubes
             [qubes]
-            options=$GRUB_CMDLINE_XEN_DEFAULT
+            options=noexitboot=1 mapbs=1 $GRUB_CMDLINE_XEN_DEFAULT
             kernel=vmlinuz root=/dev/mapper/qubes_dom0-root $GRUB_CMDLINE_LINUX
             EOF
-            {%- for (name, options) in {'qubes_debug': {'kernel': 'rd.break=initqueue'}}.items() %}
+            {%- for (name, options) in {'qubes_debug': {'kernel': 'rd.break=initqueue'}, 'enroll_tpm': {'kernel': 'uki.tpm.reroll'}}.items() %}
             cat <<EOF
             [{{- name -}}]
             options=$GRUB_CMDLINE_XEN_DEFAULT
