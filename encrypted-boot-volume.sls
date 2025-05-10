@@ -37,6 +37,7 @@
 {%- set boot_sync_instance_path_path = systemd_path + "/" + boot_sync_path("") %}
 {%- set boot_sync_failed_service_path = systemd_path + "/" + boot_sync_failed_service('') %}
 {%- set grub2_mkconfig_path = "/usr/local/sbin/grub2-mkconfig" %}
+{%- set explore_real_boot_path = "/usr/local/sbin/explore-real-boot" %}
 {%- set update_fstab = "Update fstab" %}
 
 {%- set salt_pillar_base_filename = 'encrypted-boot-volumes' %}
@@ -364,6 +365,35 @@
             mount -t tmpfs tmpfs /tmp/
             grub2-mkconfig -o /tmp/grub.cfg
             cat < /tmp/grub.cfg >&5
+          {%- endcall %}
+        {%- endcall %}
+  {%- endif %}
+
+{{p}}{{ explore_real_boot_path }}:
+  {%- if not is_activated %}
+  file.absent:
+    - name: {{ explore_real_boot_path }}
+  {%- else %}
+  file.managed:
+    - name: {{ explore_real_boot_path }}
+    - user: root
+    - require:
+        - service: {{p}}{{ enable_systemd_service }}
+    - group: root
+    - mode: 555
+    - replace: true
+    - contents: |
+        #!/bin/sh
+        process_pid=$(systemctl show --property MainPID --value {{ bash_argument(boot_watcher_service) }})
+        if [ $process_pid -eq 0 ]; then
+          echo The service {{ bash_argument(boot_watcher_service) }} must be running for explore-real-boot to work >&2
+          exit 1
+        fi
+        nsenter --mount="/proc/$process_pid/ns/mnt" {% call format_shell_exec() -%}
+          unshare --propagation private --mount {% call format_shell_exec() -%}
+            set -e
+            mount -B {{ boot_shadow }}/ /boot/
+            bash
           {%- endcall %}
         {%- endcall %}
   {%- endif %}
