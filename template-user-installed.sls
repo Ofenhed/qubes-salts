@@ -234,10 +234,15 @@ Notify qubes about installed updates:
       {%- set salt_task_name_string = yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) %}
 {{ salt_task_name_string }}:
   pkgrepo.managed:
-    - enabled: false
+    {%- set repo_options=namespace(enabled=false) %}
       {%- for key, value in download['repo']|items %}
+        {%- if key == 'enabled' %}
+          {%- set repo_options.enabled = value %}
+        {%- else %}
     - {{ yaml_string(key) }}: {{ yaml_string(value) }}
+        {%- endif %}
       {%- endfor %}
+    - enabled: {{ repo_options.enabled }}
       {%- if not dnf_workaround %}
   pkg.downloaded:
     - name: {{ yaml_string(download['name']) }}
