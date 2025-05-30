@@ -43,13 +43,6 @@
     - refresh: True
   {%- endif %}
   {%- set upgrade_all_type = 'cmd' if dnf_workaround else 'pkg' %}
-{#
-{%- if grains['os'] == 'Debian' %}
-  module.run:
-    - name: aptpkg.autoremove
-{%- endif %}
-#}
-
 
 Notify qubes about installed updates:
   cmd.run:
