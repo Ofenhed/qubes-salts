@@ -126,7 +126,7 @@ Generate systemd-cryptencroll-all-tpm:
                         }' < /etc/crypttab)
                         pcrs_argument=$(awk -vdisk="$device" '$1 == disk { if (match($4,/(^|,)(tpm2-pcrs=[0-9]+(\+[0-9]+)*)(,|$)/,m)) print m[2] }' < /etc/crypttab)
                         tpm_device_argument=$(awk -vdisk="$device" '$1 == disk { if (match($4,/(^|,)(tpm2-device=[^,]*)(,|$)/,m)) print m[2] }' < /etc/crypttab)
-                        creds_arguments=( --name=tpm-passphrase --tpm2-pcrs={{ pcr_register }} --with-key=auto-initrd --newline=no -- )
+                        creds_arguments=( --name=tpm-passphrase --tpm2-pcrs=0+2+4+{{ pcr_register }} --with-key=host+tpm2 --newline=no -- )
                         for attempt in {1..3}; do
                             if [ $attempt -eq 1 ]; then
                                 if tpm_password=$(systemd-creds "$${creds_arguments[@]}" decrypt {{ run_tpm_passphrase_path }} - 2>/dev/null); then
