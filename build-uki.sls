@@ -29,6 +29,7 @@
 {%- set create_uki = "Create unified kernel" %}
 {%- set install_uki = "Install unified kernel" %}
 {%- set create_efi_backup = "Create EFI backup" %}
+{%- set set_nextboot = "Set nextboot to TPM enroll" %}
 {%- set delete_temporary = "Delete temporary files" %}
 
 {{- grub_options(cmdline_linux, "Add random hash to generated commandline", cmdline_variable_name + "=$(dd if=/dev/random bs=2K count=10 | sha256sum | awk '{ print $1 }')", escape = False) }}
@@ -193,9 +194,50 @@
       - cmd: {{p}}{{ create_uki }}
       - cmd: {{p}}{{ create_efi_backup }}
 
+{{p}}{{ set_nextboot }}:
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script("SET_NEXTBOOT")) }}
+    - stateful: True
+    - require:
+      - file: {{p}}{{ install_uki}}
+    - env:
+      - SET_NEXTBOOT: {% call yaml_string() %}
+          #!/bin/sh
+
+          set -e
+
+          if [ $(id -u) != 0 ]; then
+              cat <<< "This must run as a privileged user" >&2
+              exit 1
+          fi
+
+          if bootnext=$(efibootmgr -u | awk '/enroll_tpm$/ { if (match($1, /Boot([0-9]+)([^0-9]|$)/, m)) { print m[1] } }'); then
+              if [[ "$bootnext" != "" ]]; then
+                  if efibootmgr --bootnext "$bootnext" 2>&1 >/dev/null; then
+                      echo '{"changed": true, "comment": "Set next boot to '"$bootnext"'. Reboot to complete the installation."}'
+                      exit
+                  else
+                      echo '{"changed": false, "comment": "efibootmgr --bootnext failed"}'
+                      exit 1
+                  fi
+              fi
+          fi
+          echo '{"changed": false, "comment": "Boot entry for enroll_tpm not found."}'
+        {%- endcall %}
+
 {{p}}{{ delete_temporary }}:
   file.absent:
     - name: {{ yaml_string(tmp_dir) }}
     - order: last
+
+{{p}}Show nextboot information:
+  test.show_notification:
+    - text: Reboot to complete the installation
+    - order: last
+    - onchanges:
+      - cmd: {{p}}{{ set_nextboot }}
+    - require:
+      - file: {{p}}{{ delete_temporary }}
+
 
 {%- endif %}
