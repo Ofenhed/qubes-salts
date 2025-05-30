@@ -356,7 +356,7 @@
     - contents: |
         #!/bin/bash
         # {{ salt_warning }}
-        sysctl -w net.ipv4.conf.all.route_localnet=1
+        echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet
   {%- endif %}
 
 /rw/config/rc.local.d/20-wireguard.rc:
