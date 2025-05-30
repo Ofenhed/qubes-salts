@@ -12,6 +12,7 @@
   {%- set activate_cached_file_usage_tracking = 'Activate cached file usage tracking' %}
   {%- set remove_unused_cached_files = 'Remove unused cache files' %}
   {%- set installed = 'Install user wanted packages' %}
+  {%- set purged = 'Purging user unwanted packages' %}
   {%- set downloaded = 'Download user sometimes wanted packages' %}
   {%- set maybe_neovim = 'Neovim unless installed locally' %}
   {%- set symlink_opt_neovim = 'Install global nvim symlink to /opt/nvim' %}
@@ -56,6 +57,25 @@ Notify qubes about installed updates:
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
 
+{{p}}{{ purged }}:
+  pkg.purged:
+    - require_in:
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+    - pkgs:
+  {%- call unique_lines() %}
+    {%- for purge in salt['pillar.get']('template-user-installed:purged', []) %}
+      {%- if purge is string %}
+      - {{ yaml_string(purge) }}
+      {%- elif purge['match_grain'] is defined and purge['names'] is defined %}
+        {%- if purge['match'] is defined and grains[purge['match_grain']] == purge['match'] %}
+          {%- for purge in purge['names'] %}
+      - {{ yaml_string(purge) }}
+          {%- endfor %}
+        {%- endif %}
+      {%- endif %}
+    {%- endfor %}
+  {%- endcall %}
+
 {{p}}{{ installed }}:
   pkg.installed:
     - require:
@@ -65,9 +85,9 @@ Notify qubes about installed updates:
     {%- for install in salt['pillar.get']('template-user-installed:installed', []) %}
       {%- if install is string %}
       - {{ yaml_string(install) }}
-      {%- elif install['match_grain'] is defined and install['values'] is defined %}
+      {%- elif install['match_grain'] is defined and install['names'] is defined %}
         {%- if install['match'] is defined and grains[install['match_grain']] == install['match'] %}
-          {%- for install in install['values'] %}
+          {%- for install in install['names'] %}
       - {{ yaml_string(install) }}
           {%- endfor %}
         {%- endif %}
@@ -115,9 +135,9 @@ Notify qubes about installed updates:
   {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
     {%- if download is string %}
       {%- do packages_for_download.append(download) %}
-    {%- elif download['match_grain'] is defined and download['values'] is defined %}
-      {%- if download['match'] is defined and grains[download['match_grain']] == download['match'] %}
-        {%- for download in download['values'] %}
+    {%- elif (download['match_grain'] is defined) and (download['names'] is defined) and (download['repo'] is not defined) %}
+      {%- if (download['match'] is defined) and grains[download['match_grain']] == download['match'] %}
+        {%- for download in download['names'] %}
           {%- do packages_for_download.append(download) %}
         {%- endfor %}
       {%- endif %}
@@ -196,8 +216,9 @@ Notify qubes about installed updates:
   {%- endif %}
 
   {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
-    {%- if download is not string and download['name'] is defined and download['repo'] is defined and download['repo']['name'] is defined %}
-{{ yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) }}:
+    {%- if download is not string and (download['name'] is defined) and (download['repo'] is defined) and (download['repo']['name'] is defined) and (download['match_grain'] is not defined or (download['match'] is defined and grains[download['match_grain']] == download['match'])) %}
+      {%- set salt_task_name_string = yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) %}
+{{ salt_task_name_string }}:
   pkgrepo.managed:
     - enabled: false
       {%- for key, value in download['repo']|items %}
