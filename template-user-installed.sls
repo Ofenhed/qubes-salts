@@ -145,14 +145,19 @@ Notify qubes about installed updates:
   {%- endfor %}
   {%- set packages_for_download = packages_for_download | unique %}
 
+{%- set cache_info = namespace(base_dir='/var/cache/libdnf5', touch_match='*/packages/*') if grains['os_family'] == 'RedHat' else (namespace(base_dir='/var/cache/apt/archives', touch_match='*.deb') if grains['os_family'] == 'Debian' and False else none) %}
+{%- set cache_tracking = cache_info is not none %}
+
+{%- if cache_tracking %}
 {{p}}{{ activate_cached_file_usage_tracking }}:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING')) }}
     - env:
       - DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING: {% call yaml_string() -%}
           set -e
-          mount -B -o atime /var/cache/libdnf5/{,}
-          touch /var/cache/libdnf5/*/packages/* {{ start_time_file }}
+          shopt -s nullglob
+          mount -B -o atime {{ cache_info.base_dir }}/{,}
+          touch {{ cache_info.base_dir }}/{{ cache_info.touch_match }} {{ start_time_file }}
           start_time=$(stat --format='%X' {{ start_time_file }})
           while [[ $(date +%s) -eq $start_time ]]; do
               sleep 0.05
@@ -166,23 +171,31 @@ Notify qubes about installed updates:
     - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
     - env:
       - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
+      set -e
+      shopt -s nullglob
       start_time=$(stat --format='%X' {{ start_time_file }})
-      cd /var/cache/libdnf5/
-      stat --format='%X %Y %n' ./*/packages/* | awk -v "start_time=$start_time" {% call escape_bash() -%}
+      cd {{ cache_info.base_dir }}
+      echo "$start_time"
+      stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }}
+      stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }} | awk -v "start_time=$start_time" {% call escape_bash() -%}
         {
           last_written=$1;
           last_access=$2;
+          file_birth=$3;
           last_any=last_access;
           if (last_written > last_any) {
               last_any=last_written;
           };
+          if (file_birth > last_any) {
+              last_any=file_birth;
+          };
           if (!(last_any > start_time)) {
-              printf "%s\0", substr($0, index($0, $3))
+              printf "%s\0", substr($0, index($0, $4))
           }
         }
       {%- endcall %} | xargs -0 -- rm -fv --
       cd /
-      umount /var/cache/libdnf5
+      umount {{ cache_info.base_dir }}
       {%- endcall %}
     - require:
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
@@ -192,6 +205,7 @@ Notify qubes about installed updates:
     - name: fstrim /
     - require:
       - cmd: {{p}}{{ remove_unused_cached_files }}
+{%- endif %}
 
 
 
@@ -216,7 +230,7 @@ Notify qubes about installed updates:
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
-  {%- if grains['os_family'] == 'RedHat' %}
+  {%- if cache_tracking %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
       - cmd: {{p}}{{ remove_unused_cached_files }}
@@ -245,7 +259,7 @@ Notify qubes about installed updates:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
       - pkgrepo: {{ salt_task_name_string }}
-      {%- if grains['os_family'] == 'RedHat' %}
+      {%- if cache_tracking %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
       - cmd: {{p}}{{ remove_unused_cached_files }}
