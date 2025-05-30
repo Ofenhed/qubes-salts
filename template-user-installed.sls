@@ -241,14 +241,15 @@ Notify qubes about installed updates:
     - env:
       - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} {{ bash_argument(download['name']) }}
       {%- endif %}
-    {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
-    {%- if grains['os_family'] == 'RedHat' %}
+      - pkgrepo: {{ salt_task_name_string }}
+      {%- if grains['os_family'] == 'RedHat' %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
       - cmd: {{p}}{{ remove_unused_cached_files }}
+      {%- endif %}
     {%- endif %}
   {%- endfor %}
 {%- endif %}
