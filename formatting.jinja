@@ -17,8 +17,8 @@
 {%- endmacro %}
 
 {%- macro format_exec_env_script(env_var, shell=none) %}
-  {%- call format_shell_exec(shell='/bin/sh') %}
-    {{- escape_bash(caller=shell if shell is string else '/bin/bash') }} <<< "${{ '{' + env_var + '}' }}"
+  {%- call format_shell_exec(shell='/bin/bash') %}
+    {{- escape_bash(caller=shell if shell is string else '/bin/bash') }} <<<"${{ '{' + env_var + '}' }}"
   {%- endcall %}
 {%- endmacro %}
 
