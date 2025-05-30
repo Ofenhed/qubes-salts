@@ -1,6 +1,6 @@
 {%- from "formatting.jinja" import salt_warning %}
 
-{%- set sys_usb_dvm_template = salt['pillar.get']('usb-usb:dvm-template:name', 'sys-usb-template') %}
+{%- set sys_usb_dvm_template = salt['pillar.get']('usb-usb:dvm-template:name', 'sys-usb-dvm') %}
 
 {%- if grains['id'] == 'dom0' %}
 
