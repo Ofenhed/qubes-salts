@@ -187,6 +187,13 @@ Notify qubes about installed updates:
     - require:
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
 
+{{p}}Trim filesystem:
+  cmd.run:
+    - name: fstrim /
+    - require:
+      - cmd: {{p}}{{ remove_unused_cached_files }}
+
+
 
 {{p}}{{ downloaded }}:
   {%- if not dnf_workaround %}
