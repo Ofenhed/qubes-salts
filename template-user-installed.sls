@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
+{%- set install_and_run_path = "/usr/bin/install-and-exec" %}
+{%- set install_and_run_fifo_path = "/run/install-and-exec" %}
+{%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
+{%- set install_and_run_service_name = "install-cached-package@.service" %}
+{%- set install_and_run_socket_name = "install-cached-package.socket" %}
+{%- set install_and_run_env_prefix = "INSTALL_AND_EXEC_PACKAGE_FOR_" %}
+{%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
+
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
   {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script %}
   {%- set p = "Template user installed - " %}
@@ -264,4 +272,107 @@ Notify qubes about installed updates:
       {%- endif %}
     {%- endif %}
   {%- endfor %}
+
+{{p}}{{ yaml_string(install_and_run_path) }}:
+  file.managed:
+    - name: {{ yaml_string(install_and_run_path) }}
+    - mode: 755
+    - user: root
+    - group: root
+    - replace: true
+    - contents: |
+        #!/bin/bash
+        # {{ salt_warning }}
+        set -e
+        target_path="/usr${BASH_SOURCE#\/usr\/local}"
+        if [ -f $target_path ]; then
+            exec "$target_path" "$@"
+        fi
+        exec {target}> >(socat - UNIX-CONNECT:{{ install_and_run_fifo_path }} 2>/dev/null)
+        install_target="$(basename -- "${BASH_SOURCE[0]}")"
+        cat <<<"${install_target}" >&${target}
+        while cat <<<"" >&${target} 2>/dev/null; do
+          sleep 0.2
+        done
+        exec "$target_path" "$@"
+
+{{p}}{{ install_and_run_socket_name }}:
+  file.managed:
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_socket_name) }}
+    - mode: 755
+    - user: root
+    - group: root
+    - replace: true
+    - contents: |
+        # {{ salt_warning }}
+        # Listen for data on {{ install_and_run_fifo_path }}, Accept=yes
+        [Unit]
+        Description=Listen for install requests on {{ install_and_run_fifo_path }}
+        ConditionFileNotEmpty={{ install_and_run_env_path }}
+        [Socket]
+        ListenStream={{ install_and_run_fifo_path }}
+        Accept=yes
+        MaxConnections=1
+        RemoveOnStop=yes
+
+        [Install]
+        WantedBy=multi-user.target
+
+{{p}}Enable {{ install_and_run_socket_name }}:
+  service.enabled:
+    - name: {{ install_and_run_socket_name }}
+    - require:
+      - file: {{p}}{{ install_and_run_socket_name }}
+
+{{p}}{{ yaml_string(install_and_run_service_name) }}:
+  file.managed:
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_service_name) }}
+    - mode: 755
+    - user: root
+    - group: root
+    - replace: true
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        Description=Install cached package
+        CollectMode=inactive-or-failed
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=no
+        EnvironmentFile="{{ install_and_run_env_path }}"
+        ExecStart={%- call systemd_shell() -%}
+          echo "exec {caller_fd}< <(socat FD:3 -)"
+          if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
+            echo "Invalid permissions for {{ install_and_run_env_path }}"
+            exit 1
+          fi
+          . {{ install_and_run_env_path }}
+          exec {caller_fd}< <(socat FD:3 -)
+          new_packages=()
+          enabled_repos=()
+          while read -r request_line <&$${caller_fd}; do
+            if [[ -z $request_line ]]; then
+              echo "Got empty line"
+              break
+            fi
+            binary_name="{{ install_and_run_env_prefix }}$${request_line//-/_}"
+            repo_name="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}"
+            echo "Read $${binary_name} (value: $${!binary_name:-UNDEFINED})"
+            if [[ -z "$${!binary_name:-}" ]]; then
+              echo "Invalid binary name $request_line" >&2
+              exec $${caller_fd}<&-
+              exit 1
+            fi
+            if [[ ! -z "$${!repo_name:-}" ]]; then
+                enabled_repos+=( --enablerepo="$${!repo_name}" )
+            fi
+            new_packages+=( "$${!binary_name}" )
+          done
+          if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
+            cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}")"
+            dnf install -Cy "$${enabled_repos[@]}" "$${new_packages[@]}"
+          fi
+          exec {caller_fd}<&-
+        {%- endcall %}
 {%- endif %}
