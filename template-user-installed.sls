@@ -303,7 +303,6 @@ Notify qubes about installed updates:
     - replace: true
     - contents: |
         # {{ salt_warning }}
-        # Listen for data on {{ install_and_run_fifo_path }}, Accept=yes
         [Unit]
         Description=Listen for install requests on {{ install_and_run_fifo_path }}
         ConditionFileNotEmpty={{ install_and_run_env_path }}
