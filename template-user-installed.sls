@@ -176,8 +176,6 @@ Notify qubes about installed updates:
       shopt -s nullglob
       start_time=$(stat --format='%X' {{ start_time_file }})
       cd {{ cache_info.base_dir }}
-      echo "$start_time"
-      stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }}
       stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }} | awk -v "start_time=$start_time" {% call escape_bash() -%}
         {
           last_written=$1;
