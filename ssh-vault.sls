@@ -37,33 +37,14 @@ add_ssh_askpass:
   {%- endif %}
 
 {%- elif vm_type == 'app' %}
-  {%- set vault_vm = salt['pillar.get']('qvm:' + grains['nodename'] + ':ssh-vault', none) %}
-  {%- set state = namespace(is_server=false) %}
-  {%- if vault_vm is none %}
-    {%- set pillar_qvm = salt['pillar.get']('qvm', {}) %}
-    {%- for (vm, options) in pillar_qvm.items() %}
-      {%- if (not state.is_server) and 'ssh-vault' in options and options['ssh-vault'] == grains['id'] %}
-        {%- set state.is_server = true %}
-      {%- endif %}
-    {%- endfor %}
-    {%- if not state.is_server %}
-show-personal-info:
-  test.show_notification:
-    - name: "No vault defined, see ssh-vault-client.sls"
-    - text: |
-        Create the file /srv/pillar/user/ssh-vault-{{ grains['nodename'] }}.top with the following content:
-        > base:
-        >   dom0:
-        >     - match: nodegroup
-        >     - user.ssh-vault
-        >   {{ grains['nodename'] }}:
-        >     - user.ssh-vault
-        Create the file /srv/pillar/user/ssh-vault-{{ grains['nodename'] }}.sls with the following content:
-        > qvm:
-        >     {{ grains['nodename'] }}:
-        >         ssh-vault: "vault" # Replace this with the name of the vault 
-    {% endif %}
-  {% endif %}
+  {%- set vault_vm = salt['pillar.get']('qvm:' + grains['id'] + ':ssh-vault', none) %}
+  {%- set state = namespace(is_server=false, is_client=vault_vm is not none, vault_vm = vault_vm) %}
+  {%- set pillar_qvm = salt['pillar.get']('qvm', {}) %}
+  {%- for (vm, options) in pillar_qvm.items() %}
+    {%- if (not state.is_server) and 'ssh-vault' in options and options['ssh-vault'] == grains['id'] %}
+      {%- set state.is_server = true %}
+    {%- endif %}
+  {%- endfor %}
 
 /rw/home/user/.config/autostart/ssh-add.desktop:
   {%- if not state.is_server %}
@@ -95,10 +76,10 @@ show-personal-info:
     - dir_mode: 755
     - replace: true
     - contents: |
-        cp /rw/config/qubes-rpc/qubes.SshAgent /etc/qubes-rpc/
+        ln -s /rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent /etc/qubes-rpc/
   {%- endif %}
 
-/rw/config/qubes-rpc/qubes.SshAgent:
+/rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent:
   {%- if not state.is_server %}
   file.absent: []
   {%- else %}
@@ -121,7 +102,7 @@ show-personal-info:
   {%- endif %}
 
 /rw/config/rc.local.d/ssh-agent.rc:
-  {%- if vault_vm == none %}
+  {%- if not state.is_client %}
   file.absent: []
   {%- else %}
   file.managed:
@@ -134,7 +115,7 @@ show-personal-info:
     - contents: |
         # SPLIT SSH CONFIGURATION
         # replace "vault" with your AppVM name which stores the ssh private key(s)
-        SSH_VAULT_VM="{{ vault_vm }}"
+        SSH_VAULT_VM="{{ state.vault_vm }}"
 
         if [ "$SSH_VAULT_VM" != "" ]; then
           export SSH_SOCK="/home/user/.SSH_AGENT_$SSH_VAULT_VM"
@@ -150,7 +131,7 @@ bash_rc_split_ssh:
     - marker_end: "# <<< SPLIT SSH CONFIGURATION"
     - show_changes: True
     - backup: '.bak'
-  {% if vault_vm != none %}
+  {% if state.is_client %}
     - append_if_not_found: True
     - content: |
         # replace "vault" with your AppVM name which stores the ssh private key(s)
