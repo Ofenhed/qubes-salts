@@ -339,7 +339,6 @@ Notify qubes about installed updates:
         RemainAfterExit=no
         EnvironmentFile="{{ install_and_run_env_path }}"
         ExecStart={%- call systemd_shell() -%}
-          echo "exec {caller_fd}< <(socat FD:3 -)"
           if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
             echo "Invalid permissions for {{ install_and_run_env_path }}"
             exit 1
