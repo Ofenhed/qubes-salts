@@ -92,7 +92,7 @@
     - makedirs: true
     - dir_mode: 755
     - contents: |
-        {{ salt_warning }}
+        # {{ salt_warning }}
         ACTION!="remove", SUBSYSTEM=="block", KERNEL=="zram*", ENV{DM_UDEV_DISABLE_DISK_RULES_FLAG}="1"
 
 /etc/sysctl.d/99-zram.conf:
