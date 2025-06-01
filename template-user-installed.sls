@@ -287,11 +287,11 @@ Notify qubes about installed updates:
             exec "$target_path" "$@"
         fi
         exec {target}> >(socat - UNIX-CONNECT:{{ install_and_run_fifo_path }} 2>/dev/null)
+        socat_pid=$!
         install_target="$(basename -- "${BASH_SOURCE[0]}")"
         cat <<<"${install_target}" >&${target}
-        while cat <<<"" >&${target} 2>/dev/null; do
-          sleep 0.2
-        done
+        cat <<<"" >&${target}
+        wait "$socat_pid"
         exec "$target_path" "$@"
 
 {{p}}{{ install_and_run_socket_name }}:
