@@ -27,20 +27,33 @@
     - ignore_if_missing: True
     - prepend_if_not_found: True
     - not_found_content: {{ yaml_string(not_found_prepend) }}
-
-{{p}}Append modifier F{{f_key}}:
-  file.replace:
-    - name: /usr/share/X11/xkb/symbols/pc
-    - flags:
-        - MULTILINE
-    - pattern: |
-        {{ not_found_prepend }}\n((\n|.)*xkb_symbols\s+"pc105"\s*\{)
-    - require:
-      - file: {{ task_name }}
-    - ignore_if_missing: True
-    - repl: |
-        \1\n  modifier_map {{ mod }} { F{{f_key}} };
   {%- endfor %}
 
+{{p}}Remap F13 and F14:
+  file.managed:
+    - name: /usr/share/X11/xkb/compat/f13f14mods
+    - user: root
+    - group: root
+    - mode: 644
+    - contents: |
+        default partial xkb_compatibility "basic" {
+            interpret F13+AnyOfOrNone(all) {
+                action= SetMods(modifiers=Mod4);
+            };
+            interpret F14+AnyOfOrNone(all) {
+                action= SetMods(modifiers=Shift+Mod4);
+            };
+        };
+
+{{p}}Include remapped F13 and F14:
+  file.replace:
+    - name: /usr/share/X11/xkb/compat/complete
+    - flags:
+        - MULTILINE
+    - pattern: |-
+        (augment\s+"xfree86"\s*)(\n\s*)((?!augment "f13f14mods")\S.+\n)
+    - ignore_if_missing: True
+    - repl: |-
+        \1\2augment "f13f14mods"\2\3
 
 {%- endif %}
