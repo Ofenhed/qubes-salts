@@ -24,7 +24,7 @@
   file.managed:
     - user: root
     - group: root
-    - mode: 555
+    - mode: 444
     - replace: true
     - contents: |
         # {{ salt_warning }}
