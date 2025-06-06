@@ -369,7 +369,7 @@ Notify qubes about installed updates:
           done
           if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
             cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}")"
-            dnf install -Cy "$${enabled_repos[@]}" "$${new_packages[@]}"
+            flock {{ install_and_run_env_path }} dnf install -Cy "$${enabled_repos[@]}" "$${new_packages[@]}"
           fi
           exec {caller_fd}<&-
         {%- endcall %}
