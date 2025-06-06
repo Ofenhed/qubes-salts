@@ -2,6 +2,11 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {%- set qubes_dns_servers = ['10.139.1.1', '10.139.1.2'] %}
+{%- set vm_type = salt['pillar.get']('qubes:type') %}
+{%- set p = "Wireguard - " %}
+{%- macro vm_task_name(vm) %}
+  {{- p + vm }} vm definition
+{%- endmacro %}
 
 {%- if grains['id'] == 'dom0' %}
   {%- from "dependents.jinja" import default_template %}
@@ -10,31 +15,70 @@
   {%- for vm in wireguard_vms.name %}
     {%- set if_name = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
     {%- set for_disposable = salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':disposable', true) %}
-{{ vm }} vm preferences:
+  {%- set vm_name = vm if not for_disposable else vm + '-dvm' %}
+{{ vm_task_name(vm_name) }}:
   qvm.vm:
-  - name: {{ vm }}
+  - name: {{ vm_name }}
+  - actions:
+    - present
+    - prefs
+{%- set vm_preferences = {
+    'label': 'red',
+    'template': salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()),
+    'include-in-backups': 'false',
+    'class': 'AppVM'
+} %}
+
+  - present:
+    {%- for key, value in vm_preferences.items() %}
+    - {{ key }}: {{ value }}
+    {%- endfor %}
   - prefs:
-    - label: red
-    - template: {{ salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()) }}
     - include-in-backups: false
-    - class: AppVM
+    {%- for key, value in vm_preferences.items() %}
+    - {{ key }}: {{ value }}
+    {%- endfor %}
 
     {%- if not for_disposable %}
     - template_for_dispvms: false
-
     {%- else %}
     - template_for_dispvms: true
     - provides-network: false
     - netvm: none
 
-{{ vm }} dvm preferences:
+  {%- set netvm = salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') %}
+
+  {%- if netvm not in wireguard_vms.name %}
+{{ vm_task_name(netvm) }}:
+  qvm.exists:
+    - name: {{ netvm }}
+  {%- endif %}
+
+{%- set dvm_preferences = {
+    'label': 'red',
+    'template': 'sys-wireguard-' + if_name + '-dvm',
+    'include-in-backups': 'false',
+    'class': 'DispVM'
+} %}
+{{ vm_task_name(vm) }}:
   qvm.vm:
-  - name: {{ vm }}-dvm
+  - name: {{ vm }}
+  - require:
+    - qvm: {{ vm_task_name(netvm) }}
+    - qvm: {{ vm_task_name(dvm_preferences['template']) }}
+  - actions:
+    - present
+    - prefs
+
+  - present:
+    {%- for key, value in dvm_preferences.items() %}
+    - {{ key }}: {{ value }}
+    {%- endfor %}
   - prefs:
-    - label: red
-    - template: sys-wireguard-{{ if_name }}
     - include-in-backups: false
-    - class: DispVM
+    {%- for key, value in dvm_preferences.items() %}
+    - {{ key }}: {{ value }}
+    {%- endfor %}
     {%- endif %}
     - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
     - provides-network: true
@@ -43,11 +87,25 @@
             - qubes-firewall
 
   {%- endfor %}
-{%- else %}
+{%- elif vm_type == 'template' %}
+
+{{p}}wireguard-tools:
+  pkg.installed:
+    - pkgs:
+      - wireguard-tools
+
+{{p}}/etc/wireguard:
+  file.directory:
+    - name: /etc/wireguard
+    - user: root
+    - group: systemd-network
+    - mode: 550
+
+{%- elif vm_type == 'app' %}
   {%- from "formatting.jinja" import salt_warning, systemd_shell %}
   {%- set vm = grains['nodename'] %}
   {%- set if_name_guess = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
-  {%- set is_sysvm = (vm == 'sys-wireguard-' + if_name_guess) %}
+  {%- set is_sysvm = (vm == 'sys-wireguard-' + if_name_guess or vm == 'sys-wireguard-' + if_name_guess + '-dvm') %}
   {%- set maybe_if_name = salt['pillar.get']('wg:if-name', None) %}
   {%- set if_name = maybe_if_name if maybe_if_name != None else if_name_guess %}
   {%- set allow_qube_forward = salt['pillar.get']('wg:forward', false) %}
@@ -65,8 +123,9 @@
   {%- endmacro %}
 
   {%- if is_sysvm or maybe_if_name != None %}
-/rw/config/qubes-bind-dirs.d/50-wireguard.conf:
+{{p}}bind dirs config:
   file.managed:
+    - name: /rw/config/qubes-bind-dirs.d/50-wireguard.conf
     - user: root
     - group: root
     - mode: 444
@@ -77,8 +136,9 @@
         # {{ salt_warning }}
         binds+=( '/etc/wireguard/' )
 
-/rw/usrlocal/lib/systemd/system/wg-resolve@.service:
+{{p}}Resolve service instance:
   file.managed:
+    - name: /rw/usrlocal/lib/systemd/system/wg-resolve@.service
     - user: root
     - group: root
     - mode: 444
@@ -116,8 +176,9 @@
 
       {%- for peer in peers_with_lookup %}
 {%- set override_file = '/rw/usrlocal/lib/systemd/system/wg-resolve@' + if_name + '-' + wg_escape(peer['public-key']) + '.service.d/environment.conf' %}
-{{ override_file }}:
+{{p}}Resolve override file:
   file.managed:
+    - name: {{ override_file }}
     - user: root
     - group: root
     - mode: 440
@@ -130,8 +191,9 @@
         Environment='wg_if_name={{ if_name }}' 'wg_peer={{ peer['public-key'] }}' 'wg_endpoint={{ peer['endpoint-name'] }}'
       {%- endfor %}
 
-/rw/usrlocal/lib/systemd/system/wg-resolve.service:
+{{p}}Resolve service:
   file.managed:
+    - name: /rw/usrlocal/lib/systemd/system/wg-resolve.service
     - user: root
     - group: root
     - mode: 444
@@ -160,8 +222,9 @@
         WantedBy=multi-user.target
 
     {%- if (peers_with_lookup | length) > 0 %}
-/rw/usrlocal/lib/systemd/system/wg-resolve.timer:
+{{p}}Resolve timer:
   file.managed:
+    - name: /rw/usrlocal/lib/systemd/system/wg-resolve.timer
     - user: root
     - group: root
     - mode: 444
@@ -174,8 +237,9 @@
         OnBootSec={{ resolve_boot_delay }}
     {%- endif %}
 
-/rw/bind-dirs/etc/wireguard/{{ if_name }}.conf:
+{{p}}Wireguard config for {{ if_name }}:
   file.managed:
+    - name: /rw/bind-dirs/etc/wireguard/{{ if_name }}.conf
     - user: root
     - group: systemd-network
     - mode: 440
@@ -225,8 +289,9 @@
 {%- set dynamic_forward_chain = "dynamic-forward" %}
 {%- set wireguard_table = "wireguard-tunnel" %}
 
-/rw/config/qubes-firewall.d/49a-general-forward.nft:
+{{p}}General forward firewall rules (part 1):
   file.managed:
+    - name: /rw/config/qubes-firewall.d/49a-general-forward.nft
     - user: root
     - group: systemd-network
     - mode: 550
@@ -244,8 +309,9 @@
            {%- endfor %}
          {%- endif %}
 
-/rw/config/qubes-firewall.d/49b-general-forward.nft:
+{{p}}General forward firewall rules (part 2):
   file.managed:
+    - name: /rw/config/qubes-firewall.d/49b-general-forward.nft
     - user: root
     - group: systemd-network
     - mode: 550
@@ -261,8 +327,9 @@
            {%- endfor %}
          {%- endif %}
 
-/rw/config/qubes-firewall.d/10-wireguard-failsafe.nft:
+{{p}}Wireguard failsafe firewall rules:
   file.managed:
+    - name: /rw/config/qubes-firewall.d/10-wireguard-failsafe.nft
     - user: root
     - group: systemd-network
     - mode: 550
@@ -278,8 +345,9 @@
            }
          }
 
-/rw/config/qubes-firewall.d/50-wireguard.nft:
+{{p}}Main firewall rules:
   file.managed:
+    - name: /rw/config/qubes-firewall.d/50-wireguard.nft
     - user: root
     - group: systemd-network
     - mode: 550
@@ -342,11 +410,13 @@
            }
          }
 
-/rw/config/rc.local.d/30-allow-redirect-to-localhost.rc:
+{{p}}Redirect to localhost firewall rules:
   {%- if not redirect_dns %}
-  file.absent: []
+  file.absent:
+    - name: /rw/config/rc.local.d/30-allow-redirect-to-localhost.rc
   {%- else %}
   file.managed:
+    - name: /rw/config/rc.local.d/30-allow-redirect-to-localhost.rc
     - user: root
     - group: root
     - mode: 555
@@ -359,8 +429,9 @@
         echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet
   {%- endif %}
 
-/rw/config/rc.local.d/20-wireguard.rc:
+{{p}}Wireguard service starter:
   file.managed:
+    - name: /rw/config/rc.local.d/20-wireguard.rc
     - user: root
     - group: root
     - mode: 555
