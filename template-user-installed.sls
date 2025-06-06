@@ -297,7 +297,7 @@ Notify qubes about installed updates:
 {{p}}{{ install_and_run_socket_name }}:
   file.managed:
     - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_socket_name) }}
-    - mode: 755
+    - mode: 444
     - user: root
     - group: root
     - replace: true
@@ -309,8 +309,10 @@ Notify qubes about installed updates:
         [Socket]
         ListenStream={{ install_and_run_fifo_path }}
         Accept=yes
-        MaxConnections=1
         RemoveOnStop=yes
+        SocketUser=user
+        SocketGroup=user
+        SocketMode=0600
 
         [Install]
         WantedBy=multi-user.target
@@ -324,7 +326,7 @@ Notify qubes about installed updates:
 {{p}}{{ yaml_string(install_and_run_service_name) }}:
   file.managed:
     - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_service_name) }}
-    - mode: 755
+    - mode: 444
     - user: root
     - group: root
     - replace: true
