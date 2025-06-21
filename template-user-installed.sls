@@ -153,30 +153,31 @@ Notify qubes about installed updates:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
     - env:
-      - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() -%}
-      set -e
-      shopt -s nullglob
-      start_time=$(stat --format='%X' {{ start_time_file }})
-      cd {{ cache_info.base_dir }}
-      stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }} | awk -v "start_time=$start_time" {% call escape_bash() -%}
-        {
-          last_written=$1;
-          last_access=$2;
-          file_birth=$3;
-          last_any=last_access;
-          if (last_written > last_any) {
-              last_any=last_written;
-          };
-          if (file_birth > last_any) {
-              last_any=file_birth;
-          };
-          if (!(last_any > start_time)) {
-              printf "%s\0", substr($0, index($0, $4))
-          }
-        }
-      {%- endcall %} | xargs -0 -- rm -fv --
-      cd /
-      umount {{ cache_info.base_dir }}
+      - AWK_FIND_UNTOUCHED_FILES: {% call yaml_string() %}
+            {
+              last_written=$1;
+              last_access=$2;
+              file_birth=$3;
+              last_any=last_access;
+              if (last_written > last_any) {
+                  last_any=last_written;
+              };
+              if (file_birth > last_any) {
+                  last_any=file_birth;
+              };
+              if (!(last_any > start_time)) {
+                  printf "%s\0", substr($0, index($0, $4))
+              }
+            }
+        {%- endcall %}
+      - DNF_REMOVE_UNUSED_FILES: {% call yaml_string() %}
+          set -e
+          shopt -s nullglob
+          start_time=$(stat --format='%X' {{ start_time_file }})
+          cd {{ cache_info.base_dir }}
+          stat --format='%X %Y %W %n' ./{{ cache_info.touch_match }} | awk -v "start_time=$start_time" "$AWK_FIND_UNTOUCHED_FILES" | xargs -0 -- rm -fv --
+          cd /
+          umount {{ cache_info.base_dir }}
       {%- endcall %}
     - require:
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
