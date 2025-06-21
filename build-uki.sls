@@ -165,11 +165,22 @@
     - require:
       - cmd: {{p}}{{ create_uki}}
     - env:
+      - AWK_SCRIPT_EXTRACT_UID: {% call yaml_string() %}
+          {
+            for (i=1; i<=NF; i++) {
+              if ($i ~ /^{{ cmdline_variable_name | regex_escape }}/) {
+                split($i,f,"=");
+                print f[2];
+                exit 0
+              }
+            }
+          }
+      {%- endcall %}
       - CREATE_EFI_BACKUP: {% call yaml_string() %}
           set -e
           cp {{ bash_argument(efi_current_path) }} {{ bash_argument(tmp_current_elf) }}
           {%- macro extract_uid(filename) -%}
-          $(awk '{ for (i=1; i<=NF; i++) { if ($i ~ /^{{ cmdline_variable_name | regex_escape }}/) { split($i,f,"="); print f[2]; exit 0 } } }' < {{ bash_argument(filename) }})
+          $(awk "$AWK_SCRIPT_EXTRACT_UID" < {{ bash_argument(filename) }})
           {%- endmacro %}
           current_uid={{- extract_uid('/proc/cmdline') }}
           if [ "$current_uid" == "" ]; then
