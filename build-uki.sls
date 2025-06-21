@@ -5,6 +5,7 @@
 {%- set cmdline_variable_name = "uki.generator.uuid" %}
 
 {%- set p = "Build uki - " %}
+{%- set uki_options = salt['pillar.get']('uki', {}) %}
 {%- set tmp_dir = salt['temp.dir']() %}
 {%- set tmp_xen_verification_output = tmp_dir + '/xen_verification' %}
 {%- set tmp_kernel_verification_output = tmp_dir + '/kernel_verification' %}
@@ -138,9 +139,12 @@
           kernel_image=$(cat < {{ bash_argument(tmp_current_kernel_output) }})
           echo initrd: {{ bash_argument(tmp_initrd_image) }}
           uki_generate_args=()
-          {%- if "AMD" in grains['cpu_model'] %}
-          if [ -f /usr/lib/firmware/amd-ucode/microcode_amd.bin ]; then
-              uki_generate_args+=( --custom-section ucode /usr/lib/firmware/amd-ucode/microcode_amd.bin )
+          {%- set cpu_ucode = bash_argument(uki_options['cpu-ucode']) if 'cpu-ucode' in uki_options else none %}
+          {%- if cpu_ucode is not none %}
+          if [ -f {{ cpu_ucode }} ]; then
+              uki_generate_args+=( --custom-section ucode {{ cpu_ucode }} )
+          else
+              echo "Could not find ucode image" {{ cpu_ucode }}
           fi
           {%- endif %}
           echo "Xen image: $xen_image"
