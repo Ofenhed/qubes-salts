@@ -336,8 +336,8 @@ Notify qubes about installed updates:
               echo "Got empty line"
               break
             fi
-            binary_name="{{ install_and_run_env_prefix }}$${request_line//-/_}"
-            repo_name="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}"
+            binary_name="{{ install_and_run_env_prefix }}$${request_line//-/_}[@]"
+            repo_name="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}[@]"
             echo "Read $${binary_name} (value: $${!binary_name:-UNDEFINED})"
             if [[ -z "$${!binary_name:-}" ]]; then
               echo "Invalid binary name $request_line" >&2
