@@ -76,7 +76,7 @@ Generate systemd-cryptencroll-all-tpm:
         }
 
         install() {
-            inst_multiple sha256sum awk  systemd-cryptenroll systemd-creds tpm2_pcrextend
+            inst_multiple sha256sum awk systemd-cryptenroll systemd-creds tpm2_pcrextend
             inst_simple "$moddir/{{ service_filename }}" /usr/lib/systemd/system/{{ service_filename }}
             inst_hook cmdline 02 "$moddir/{{ cmdline_filename }}"
         }
