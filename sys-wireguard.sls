@@ -15,7 +15,7 @@
   {%- for vm in wireguard_vms.name %}
     {%- set if_name = vm | replace('sys-wireguard-', '') | replace('-dvm', '') %}
     {%- set for_disposable = salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':disposable', true) %}
-  {%- set vm_name = vm if not for_disposable else vm + '-dvm' %}
+    {%- set vm_name = vm if not for_disposable else vm + '-dvm' %}
 {{ vm_task_name(vm_name) }}:
   qvm.vm:
   - name: {{ vm_name }}
@@ -26,6 +26,9 @@
     'label': 'red',
     'template': salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()),
     'include-in-backups': 'false',
+    'maxmem': 0,
+    'memory': 512,
+    'vcpus': 1,
     'class': 'AppVM'
 } %}
 
@@ -58,6 +61,9 @@
     'label': 'red',
     'template': 'sys-wireguard-' + if_name + '-dvm',
     'include-in-backups': 'false',
+    'maxmem': 0,
+    'memory': 512,
+    'vcpus': 1,
     'class': 'DispVM'
 } %}
 {{ vm_task_name(vm) }}:
