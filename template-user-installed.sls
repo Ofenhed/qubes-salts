@@ -257,6 +257,7 @@ Notify qubes about installed updates:
     {%- endif %}
   {%- endfor %}
 
+  {%- if grains['os'] in ['Fedora', 'Debian'] %}
 {{p}}{{ yaml_string(install_and_run_path) }}:
   file.managed:
     - name: {{ yaml_string(install_and_run_path) }}
@@ -348,15 +349,23 @@ Notify qubes about installed updates:
               exec $${caller_fd}<&-
               exit 1
             fi
+          {%- if grains['os'] == 'Fedora' %}
             if [[ ! -z "$${!repo_name:-}" ]]; then
                 enabled_repos+=( --enablerepo="$${!repo_name}" )
             fi
+          {%- endif %}
             new_packages+=( "$${!binary_name}" )
           done
           if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
             cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}")"
-            flock {{ install_and_run_env_path }} dnf install -Cy "$${enabled_repos[@]}" "$${new_packages[@]}"
+            flock {{ bash_argument(install_and_run_env_path) }}
+              {%- if grains['os'] == 'Fedora' -%}
+                dnf install -Cy "$${enabled_repos[@]}"
+              {%- elif grains['os'] == 'Debian' -%}
+                apt-get install --no-download --yes
+              {%- endif %} "$${new_packages[@]}"
           fi
           exec {caller_fd}<&-
         {%- endcall %}
+  {%- endif %}
 {%- endif %}
