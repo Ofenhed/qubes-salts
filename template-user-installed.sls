@@ -78,11 +78,13 @@ Notify qubes about installed updates:
     - pkgs:
   {%- call unique_lines() %}
     {%- for install in salt['pillar.get']('template-user-installed:installed', []) %}
-      {%- if install is string %}
+      {%- if install is string and install != 'neovim' %}
       - {{ yaml_string(install) }}
       {%- endif %}
     {%- endfor %}
   {%- endcall %}
+
+  {%- if 'neovim' in salt['pillar.get']('template-user-installed:installed', []) %}
 
 {{p}}{{ symlink_opt_neovim }}:
   file.symlink:
@@ -119,6 +121,7 @@ Notify qubes about installed updates:
     - name: /usr/bin/vim
     - require:
       - pkg: {{p}}{{ uninstall_vim }}
+  {%- endif %}
 
   {%- set packages_for_download = [] %}
   {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
