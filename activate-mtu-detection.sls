@@ -13,6 +13,12 @@
     - replace: true
     - contents: |
          # {{ salt_warning }}
-         net.ipv4.tcp_mtu_probing=1
+
+         # 0 - Disabled
+         # 1 - Disabled by default, enabled when an ICMP black hole detected
+         # 2 - Always enabled, use initial MSS_of tcp_base_mss
+         net.ipv4.tcp_mtu_probing=2
+
+
          net.ipv4.tcp_base_mss=1024
 
