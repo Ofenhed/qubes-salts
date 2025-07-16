@@ -326,7 +326,7 @@ Notify qubes about installed updates:
         [Service]
         Type=oneshot
         RemainAfterExit=no
-        EnvironmentFile="{{ install_and_run_env_path }}"
+        EnvironmentFile={{ install_and_run_env_path }}
         ExecStart={%- call systemd_shell() -%}
           if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
             echo "Invalid permissions for {{ install_and_run_env_path }}"
