@@ -33,6 +33,34 @@ Use {{ sys_usb_dvm_template }} in sys-usb:
       - provies-network: false
       - netvm: none
 {%- elif grains['id'] == sys_usb_dvm_template %}
+/rw/config/rc.local.d/00-reload-udev.rc:
+  file.managed:
+    - user: root
+    - group: root
+    - mode: 500
+    - dir_mode: 755
+    - makedirs: true
+    - replace: true
+    - contents: |
+        # #!/bin/sh
+        # {{ salt_warning }}
+
+        exec udevadm control --reload-rules
+
+/usr/local/lib/systemd/system/qubes-input-sender-keyboard@.service.d/no-ignored.conf:
+  file.managed:
+    - user: root
+    - group: root
+    - mode: 444
+    - dir_mode: 755
+    - makedirs: true
+    - replace: true
+    - contents: |
+        # {{ salt_warning }}
+        [Service]
+        Environment="INPUT_DEVICE=/dev/input/%I"
+        ExecCondition=sh -c "! (udevadm info --json pretty \"$INPUT_DEVICE\" | grep 'LIBINPUT_IGNORE_DEVICE\" : \"1')"
+
 /usr/local/lib/udev/rules.d/89-disable-inputs.rules:
   file.managed:
     - user: root
