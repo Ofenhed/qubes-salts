@@ -13,9 +13,9 @@
   {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script %}
   {%- set p = "Template user installed - " %}
   {%- set upgrade_all = 'Upgrade all installed packages' %}
+  {%- set autoremove = 'Remove unused packages' %}
   {%- set keep_cache_for_non_template = 'Keep dnf cache for non template VMs' %}
   {%- set enable_non_template_cache_service = 'Enable dnf caching service' %}
-  {%- set keep_cache_for_non_template_service = 'keep-dnf-cache.service' %}
   {%- set start_time_file = '/run/template-user-installed-start-time' %}
   {%- set activate_cached_file_usage_tracking = 'Activate cached file usage tracking' %}
   {%- set remove_unused_cached_files = 'Remove unused cache files' %}
@@ -26,12 +26,20 @@
   {%- set symlink_opt_neovim = 'Install global nvim symlink to /opt/nvim' %}
   {%- set symlink_vim_to_neovim = 'Install global nvim symlink from vim' %}
   {%- set uninstall_vim = 'Uninstall vim if neovim is installed' %}
-  {%- set dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41' %}
 
-  {% if grains['os_family'] == 'RedHat' %}
-/usr/lib/systemd/system/{{ keep_cache_for_non_template_service }}:
-  file.absent: []
+  {#- {%- set dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41' %} #}
+  {%- set target = namespace(dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41'
+                            ,dnf = grains['os_family'] == 'RedHat'
+                            ,apt = grains['os_family'] == 'Debian'
+                            ,fedora = grains['os'] == 'Fedora'
+                            ,debian = grains['os'] == 'Debian'
+                            ,version = grains['osrelease']
+                            ,installed = salt['pillar.get']('template-user-installed:installed', [])
+                            ,downloaded = salt['pillar.get']('template-user-installed:downloaded', [])
+                            ,purged = salt['pillar.get']('template-user-installed:purged', [])
+                            ) %}
 
+  {%- if target.dnf %}
 {{p}}{{ keep_cache_for_non_template }}:
   cmd.run:
     - name: {% call yaml_string() -%}
@@ -42,7 +50,7 @@
   {%- endif %}
 
 {{p}}{{ upgrade_all }}:
-  {%- if dnf_workaround %}
+  {%- if target.dnf_workaround %}
   cmd.run:
     - name: dnf upgrade -y
     - unless: dnf check-update
@@ -50,13 +58,22 @@
   pkg.uptodate:
     - refresh: True
   {%- endif %}
-  {%- set upgrade_all_type = 'cmd' if dnf_workaround else 'pkg' %}
+  {%- set upgrade_all_type = 'cmd' if target.dnf_workaround else 'pkg' %}
+
+  {%- if target.apt %}
+{{p}}{{ autoremove }}:
+  module.run:
+    - pkg.autoremove: {}
+  {%- endif %}
 
 Notify qubes about installed updates:
   cmd.run:
     - name: /usr/lib/qubes/upgrades-status-notify
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+  {%- if target.apt %}
+      - module: {{p}}{{ autoremove }}
+  {%- endif %}
 
 {{p}}{{ purged }}:
   pkg.purged:
@@ -64,7 +81,7 @@ Notify qubes about installed updates:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
     - pkgs:
   {%- call unique_lines() %}
-    {%- for purge in salt['pillar.get']('template-user-installed:purged', []) %}
+    {%- for purge in target.purged %}
       {%- if purge is string %}
       - {{ yaml_string(purge) }}
       {%- endif %}
@@ -77,14 +94,14 @@ Notify qubes about installed updates:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
     - pkgs:
   {%- call unique_lines() %}
-    {%- for install in salt['pillar.get']('template-user-installed:installed', []) %}
+    {%- for install in target.installed %}
       {%- if install is string and install != 'neovim' %}
       - {{ yaml_string(install) }}
       {%- endif %}
     {%- endfor %}
   {%- endcall %}
 
-  {%- if 'neovim' in salt['pillar.get']('template-user-installed:installed', []) %}
+  {%- if 'neovim' in target.installed %}
 
 {{p}}{{ symlink_opt_neovim }}:
   file.symlink:
@@ -106,11 +123,11 @@ Notify qubes about installed updates:
 {{p}}{{ uninstall_vim }}:
   pkg.purged:
     - pkgs:
-  {%- if grains['os'] == 'Fedora' %}
+    {%- if target.fedora %}
       - vim-enhanced
-  {%- elif grains['os'] == 'Debian' %}
+    {%- elif target.debian %}
       - vim-tiny
-  {%- endif %}
+    {%- endif %}
     - require_any:
       - pkg: {{p}}{{ maybe_neovim }}
       - file: {{p}}{{ symlink_opt_neovim }}
@@ -124,17 +141,17 @@ Notify qubes about installed updates:
   {%- endif %}
 
   {%- set packages_for_download = [] %}
-  {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
+  {%- for download in target.downloaded %}
     {%- if download is string %}
       {%- do packages_for_download.append(download) %}
     {%- endif %}
   {%- endfor %}
   {%- set packages_for_download = packages_for_download | unique %}
 
-{%- set cache_info = namespace(base_dir='/var/cache/libdnf5', touch_match='*/packages/*') if grains['os_family'] == 'RedHat' else (namespace(base_dir='/var/cache/apt/archives', touch_match='*.deb') if grains['os_family'] == 'Debian' and False else none) %}
-{%- set cache_tracking = cache_info is not none %}
+  {%- set cache_info = namespace(base_dir='/var/cache/libdnf5', touch_match='*/packages/*') if target.dnf else (namespace(base_dir='/var/cache/apt/archives', touch_match='*.deb') if target.apt and False else none) %}
+  {%- set cache_tracking = cache_info is not none %}
 
-{%- if cache_tracking %}
+  {%- if cache_tracking %}
 {{p}}{{ activate_cached_file_usage_tracking }}:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING')) }}
@@ -190,12 +207,12 @@ Notify qubes about installed updates:
     - name: fstrim /
     - require:
       - cmd: {{p}}{{ remove_unused_cached_files }}
-{%- endif %}
+  {%- endif %}
 
 
 
 {{p}}{{ downloaded }}:
-  {%- if not dnf_workaround %}
+  {%- if not target.dnf_workaround %}
   pkg.downloaded:
     - failhard: False
     - order: last
@@ -221,12 +238,12 @@ Notify qubes about installed updates:
       - cmd: {{p}}{{ remove_unused_cached_files }}
   {%- endif %}
 
-  {%- for download in salt['pillar.get']('template-user-installed:downloaded', []) %}
+  {%- for download in target.downloaded %}
     {%- if download is not string and (download['name'] is defined) and (download['repo'] is defined) and (download['repo']['name'] is defined) %}
       {%- set salt_task_name_string = yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) %}
 {{ salt_task_name_string }}:
   pkgrepo.managed:
-    {%- set repo_options=namespace(enabled=false) %}
+      {%- set repo_options=namespace(enabled=false) %}
       {%- for key, value in download['repo']|items %}
         {%- if key == 'enabled' %}
           {%- set repo_options.enabled = value %}
@@ -235,7 +252,7 @@ Notify qubes about installed updates:
         {%- endif %}
       {%- endfor %}
     - enabled: {{ repo_options.enabled }}
-      {%- if not dnf_workaround %}
+      {%- if not target.dnf_workaround %}
   pkg.downloaded:
     - name: {{ yaml_string(download['name']) }}
     - enablerepo: {{ yaml_string(download['repo']['name']) }}
@@ -257,7 +274,7 @@ Notify qubes about installed updates:
     {%- endif %}
   {%- endfor %}
 
-  {%- if grains['os'] in ['Fedora', 'Debian'] %}
+  {%- if target.dnf or target.apt %}
 {{p}}{{ yaml_string(install_and_run_path) }}:
   file.managed:
     - name: {{ yaml_string(install_and_run_path) }}
@@ -335,6 +352,9 @@ Notify qubes about installed updates:
           . {{ install_and_run_env_path }}
           exec {caller_fd}< <(socat FD:3 -)
           new_packages=()
+          {%- if target.apt %}
+          deb_files=()
+          {%- endif %}
           enabled_repos=()
           while read -r request_line <&$${caller_fd}; do
             if [[ -z $request_line ]]; then
@@ -349,21 +369,48 @@ Notify qubes about installed updates:
               exec $${caller_fd}<&-
               exit 1
             fi
-          {%- if grains['os'] == 'Fedora' %}
+          {%- if target.dnf %}
             if [[ ! -z "$${!repo_name:-}" ]]; then
-                enabled_repos+=( --enablerepo="$${!repo_name}" )
+              enabled_repos+=( --enablerepo="$${!repo_name}" )
             fi
           {%- endif %}
+          {%- if target.apt %}
+            if [ -f "$${!binary_name}" ]; then
+              deb_files+=( "$${!binary_name}" )
+            else
+              new_packages+=( "$${!binary_name}" )
+            fi
+          {%- else %}
             new_packages+=( "$${!binary_name}" )
+          {%- endif %}
           done
+          lock_file=""
+          {%- set activate_lock %}
+            if [[ "$lock_file" == "" ]]; then
+              cat <<<"Activating lock"
+              exec {lock_file}<{{ bash_argument(install_and_run_env_path, before='', after='') }}
+              flock -x "$lock_file"
+            fi
+          {%- endset %}
+          {%- if target.apt %}
+          if [[ "{{- "$${#deb_files[@]}" -}}" -gt 0 ]]; then
+            {{- activate_lock }}
+            cat <<<"Installing deb files $(printf '"%%s" ' "$${deb_files[@]}")"
+            dpkg -i "$${deb_files[@]}"
+            apt-get install -f --no-download --yes
+          fi
+          {%- endif %}
           if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
+            {{- activate_lock }}
             cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}")"
-            flock {{ bash_argument(install_and_run_env_path) }}
-              {%- if grains['os'] == 'Fedora' -%}
+          {%- if target.dnf %}
                 dnf install -Cy "$${enabled_repos[@]}"
-              {%- elif grains['os'] == 'Debian' -%}
+          {%- elif target.apt %}
                 apt-get install --no-download --yes
-              {%- endif %} "$${new_packages[@]}"
+          {%- endif %} "$${new_packages[@]}"
+          fi
+          if [[ "$lock_file" != "" ]]; then
+            exec {lock_file}<&-
           fi
           exec {caller_fd}<&-
         {%- endcall %}
