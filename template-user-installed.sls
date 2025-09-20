@@ -6,6 +6,7 @@
 {%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
 {%- set install_and_run_service_name = "install-cached-package@.service" %}
 {%- set install_and_run_socket_name = "install-cached-package.socket" %}
+{%- set install_and_run_socket_group = "auto-install" %}
 {%- set install_and_run_env_prefix = "INSTALL_AND_EXEC_PACKAGE_FOR_" %}
 {%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
 
@@ -13,6 +14,7 @@
   {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script %}
   {%- set p = "Template user installed - " %}
   {%- set upgrade_all = 'Upgrade all installed packages' %}
+  {%- set upgrade_arch_keyring = 'Upgrade Arch linux keyrings' %}
   {%- set autoremove = 'Remove unused packages' %}
   {%- set keep_cache_for_non_template = 'Keep dnf cache for non template VMs' %}
   {%- set enable_non_template_cache_service = 'Enable dnf caching service' %}
@@ -26,18 +28,25 @@
   {%- set symlink_opt_neovim = 'Install global nvim symlink to /opt/nvim' %}
   {%- set symlink_vim_to_neovim = 'Install global nvim symlink from vim' %}
   {%- set uninstall_vim = 'Uninstall vim if neovim is installed' %}
+  {%- set import_gpgs = 'Import GPG keys' %}
 
-  {#- {%- set dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41' %} #}
-  {%- set target = namespace(dnf_workaround = grains['os'] == 'Fedora' and grains['osrelease'] == '41'
-                            ,dnf = grains['os_family'] == 'RedHat'
+  {%- set target = namespace(dnf_workaround = grains['os'] == 'Fedora'
                             ,apt = grains['os_family'] == 'Debian'
-                            ,fedora = grains['os'] == 'Fedora'
+                            ,dnf = grains['os_family'] == 'RedHat'
+                            ,pacman = grains['os_family'] == 'Arch'
+                            ,arch = grains['os'] == 'Arch'
                             ,debian = grains['os'] == 'Debian'
+                            ,fedora = grains['os'] == 'Fedora'
                             ,version = grains['osrelease']
                             ,installed = salt['pillar.get']('template-user-installed:installed', [])
                             ,downloaded = salt['pillar.get']('template-user-installed:downloaded', [])
                             ,purged = salt['pillar.get']('template-user-installed:purged', [])
+                            ,post_install_command = None
                             ) %}
+  {%- set post_install = namespace(import_gpgs = {}) %}
+  {%- macro gpg_filename(name) -%}
+    /etc/pki/rpm-gpg/RPM-GPG-KEY-{{ name }}
+  {%- endmacro %}
 
   {%- if target.dnf %}
 {{p}}{{ keep_cache_for_non_template }}:
@@ -60,6 +69,15 @@
   {%- endif %}
   {%- set upgrade_all_type = 'cmd' if target.dnf_workaround else 'pkg' %}
 
+  {%- if target.pacman %}
+{{p}}{{ upgrade_arch_keyring }}:
+  pkg.installed:
+    - name: archlinux-keyring
+    - refresh: true
+    - require_in:
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+  {%- endif %}
+
   {%- if target.apt %}
 {{p}}{{ autoremove }}:
   module.run:
@@ -76,17 +94,36 @@ Notify qubes about installed updates:
   {%- endif %}
 
 {{p}}{{ purged }}:
+  {%- if target.pacman and false %}
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script('PURGE_PACKAGES')) }}
+    - env:
+      - PURGE_PACKAGES: {% call yaml_string() -%}
+          purge_candidates=($PACKAGES_TO_PURGE)
+          pacman -Rns -- "${purge_candidates}"
+    {%- endcall %}
+      - PACKAGES_TO_PURGE: {% call yaml_string() -%}
+      {%- call unique_lines() %}
+        {%- for purge in target.purged %}
+          {%- if purge is string %}
+            {{ purge }}
+          {%- endif %}
+        {%- endfor %}
+      {%- endcall %}
+    {%- endcall %}
+  {%- else %}
   pkg.purged:
     - require_in:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
     - pkgs:
-  {%- call unique_lines() %}
-    {%- for purge in target.purged %}
-      {%- if purge is string %}
+    {%- call unique_lines() %}
+      {%- for purge in target.purged %}
+        {%- if purge is string %}
       - {{ yaml_string(purge) }}
-      {%- endif %}
-    {%- endfor %}
-  {%- endcall %}
+        {%- endif %}
+      {%- endfor %}
+    {%- endcall %}
+  {%- endif %}
 
 {{p}}{{ installed }}:
   pkg.installed:
@@ -127,6 +164,8 @@ Notify qubes about installed updates:
       - vim-enhanced
     {%- elif target.debian %}
       - vim-tiny
+    {%- elif target.arch %}
+      - vim
     {%- endif %}
     - require_any:
       - pkg: {{p}}{{ maybe_neovim }}
@@ -212,7 +251,7 @@ Notify qubes about installed updates:
 
 
 {{p}}{{ downloaded }}:
-  {%- if not target.dnf_workaround %}
+  {%- if not (target.dnf_workaround or target.pacman) %}
   pkg.downloaded:
     - failhard: False
     - order: last
@@ -222,12 +261,21 @@ Notify qubes about installed updates:
     {%- endfor %}
   {%- else %}
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
+    - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND') if target.dnf else (format_exec_env_script('PACMAN_INSTALL_COMMAND') if target.pacman else "false")) }}
     - env:
-      - DNF_INSTALL_COMMAND: dnf install --downloadonly --quiet -y
-    {%- for package in packages_for_download %}
-      {{- bash_argument(package) }}
-    {%- endfor %}
+      - DNF_INSTALL_COMMAND: {% call yaml_string() -%}
+          packages_to_download=($PACKAGES_TO_DOWNLOAD);
+          dnf install --downloadonly --quiet -y "${packages_to_download[@]}"
+    {%- endcall %}
+      - PACMAN_INSTALL_COMMAND: {% call yaml_string() -%}
+          packages_to_download=($PACKAGES_TO_DOWNLOAD);
+          /run/qubes/bin/pacman -Sywv --noconfirm --noprogressbar -- "${packages_to_download[@]}"
+    {%- endcall %}
+      - PACKAGES_TO_DOWNLOAD: {% call yaml_string() -%}
+      {%- for package in packages_for_download %}
+        {{ package }}
+      {%- endfor %}
+    {%- endcall %}
   {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
@@ -243,14 +291,27 @@ Notify qubes about installed updates:
       {%- set salt_task_name_string = yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) %}
 {{ salt_task_name_string }}:
   pkgrepo.managed:
-      {%- set repo_options=namespace(enabled=false) %}
+      {%- set repo_options=namespace(enabled=false, gpg_key=None, import_gpg=False) %}
       {%- for key, value in download['repo']|items %}
         {%- if key == 'enabled' %}
           {%- set repo_options.enabled = value %}
+        {%- elif key == 'import_gpg' -%}
+          {%- set repo_options.gpg_key = gpg_filename(download['repo']['name']) %}
+          {%- do post_install.import_gpgs.update({repo_options.gpg_key: value}) %}
+          {%- set post_install.import_gpg = True %}
+        {%- elif key == 'gpgkey' %}
+          {%- if repo_options.gpg_key == None %}
+            {%- set repo_options.gpg_key = value %}
+          {%- endif %}
         {%- else %}
     - {{ yaml_string(key) }}: {{ yaml_string(value) }}
         {%- endif %}
       {%- endfor %}
+    {%- if repo_options.import_gpg %}
+    - require:
+      - file: {{ yaml_string(p + import_gpgs + ': ' + repo_options.gpg_key) }}
+      - cmd: {{ yaml_string(p + import_gpgs + ': ' + repo_options.gpg_key) }}
+    {%- endif %}
     - enabled: {{ repo_options.enabled }}
       {%- if not target.dnf_workaround %}
   pkg.downloaded:
@@ -260,7 +321,8 @@ Notify qubes about installed updates:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
     - env:
-      - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} {{ bash_argument(download['name']) }}
+      - DNF_INSTALL_PACKAGE: {{ yaml_string(download['name']) }}
+      - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
       {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
@@ -274,6 +336,22 @@ Notify qubes about installed updates:
     {%- endif %}
   {%- endfor %}
 
+  {%- if target.dnf %}
+    {%- for key,value in post_install.import_gpgs|items %}
+{{ yaml_string(p + import_gpgs + ': ' + key) }}:
+  file.managed:
+    - name: {{ yaml_string(key) }}
+    - source: {{ yaml_string(value) }}
+    - user: root
+    - group: root
+    - mode: 644
+  cmd.run:
+    - name: rpmkeys --import "$GPG_KEY_FILE"
+    - env:
+      - GPG_KEY_FILE: {{ yaml_string(key) }}
+    {%- endfor %}
+  {%- endif %}
+
   {%- if target.dnf or target.apt %}
 {{p}}{{ yaml_string(install_and_run_path) }}:
   file.managed:
@@ -286,17 +364,22 @@ Notify qubes about installed updates:
         #!/bin/bash
         # {{ salt_warning }}
         set -e
-        target_path="/usr${BASH_SOURCE#\/usr\/local}"
+        self_path="${BASH_SOURCE[-1]}"
+        target_path="/usr${self_path#\/usr\/local}"
         if [ -f $target_path ]; then
             exec "$target_path" "$@"
         fi
         exec {target}> >(socat - UNIX-CONNECT:{{ install_and_run_fifo_path }} 2>/dev/null)
         socat_pid=$!
-        install_target="$(basename -- "${BASH_SOURCE[0]}")"
+        install_target="$(basename -- "$self_path")"
         cat <<<"${install_target}" >&${target}
         cat <<<"" >&${target}
         wait "$socat_pid"
         exec "$target_path" "$@"
+
+{{p}}Create {{ install_and_run_socket_group }}:
+  group.present:
+    - name: {{ install_and_run_socket_group }}
 
 {{p}}{{ install_and_run_socket_name }}:
   file.managed:
@@ -315,8 +398,8 @@ Notify qubes about installed updates:
         Accept=yes
         RemoveOnStop=yes
         SocketUser=user
-        SocketGroup=user
-        SocketMode=0600
+        SocketGroup={{ install_and_run_socket_group }}
+        SocketMode=0660
 
         [Install]
         WantedBy=multi-user.target
@@ -361,53 +444,86 @@ Notify qubes about installed updates:
               echo "Got empty line"
               break
             fi
-            binary_name="{{ install_and_run_env_prefix }}$${request_line//-/_}[@]"
-            repo_name="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}[@]"
-            echo "Read $${binary_name} (value: $${!binary_name:-UNDEFINED})"
-            if [[ -z "$${!binary_name:-}" ]]; then
+            binary_names="{{ install_and_run_env_prefix }}$${request_line//-/_}[@]"
+            repo_names="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}[@]"
+            echo "Read $${binary_names} (value: $${!binary_names:-UNDEFINED})"
+            if [[ -z "$${!binary_names:-}" ]]; then
               echo "Invalid binary name $request_line" >&2
               exec $${caller_fd}<&-
               exit 1
             fi
           {%- if target.dnf %}
-            if [[ ! -z "$${!repo_name:-}" ]]; then
-              enabled_repos+=( --enablerepo="$${!repo_name}" )
-            fi
+            for repo_name in $${!repo_names}; do
+              enabled_repos+=( --enablerepo="$repo_name" )
+            done
           {%- endif %}
+            for binary_name in $${!binary_names}; do
           {%- if target.apt %}
-            if [ -f "$${!binary_name}" ]; then
-              deb_files+=( "$${!binary_name}" )
-            else
-              new_packages+=( "$${!binary_name}" )
-            fi
+              if [ -f "$binary_name" ]; then
+                deb_files+=( "$binary_name" )
+              else
+                new_packages+=( "$binary_name" )
+              fi
           {%- else %}
-            new_packages+=( "$${!binary_name}" )
+              new_packages+=( "$binary_name" )
           {%- endif %}
+            done
           done
           lock_file=""
           {%- set activate_lock %}
+            {%- if target.apt %}
             if [[ "$lock_file" == "" ]]; then
               cat <<<"Activating lock"
               exec {lock_file}<{{ bash_argument(install_and_run_env_path, before='', after='') }}
               flock -x "$lock_file"
             fi
+            {%- endif %}
           {%- endset %}
           {%- if target.apt %}
           if [[ "{{- "$${#deb_files[@]}" -}}" -gt 0 ]]; then
             {{- activate_lock }}
             cat <<<"Installing deb files $(printf '"%%s" ' "$${deb_files[@]}")"
             dpkg -i "$${deb_files[@]}"
-            apt-get install -f --no-download --yes
           fi
           {%- endif %}
           if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
             {{- activate_lock }}
-            cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}")"
-          {%- if target.dnf %}
-                dnf install -Cy "$${enabled_repos[@]}"
-          {%- elif target.apt %}
-                apt-get install --no-download --yes
-          {%- endif %} "$${new_packages[@]}"
+          {%- set install_command %}
+              {%- if target.dnf -%}
+                  dnf install -Cy "$${enabled_repos[@]}"
+              {%- elif target.apt -%}
+                  {%- set apt_cmd = "apt-get install -o DPkg::Lock::Timeout=60 --no-download --yes" %}
+                  {%- set target.post_install_command = apt_cmd + " --fix-broken" %}
+                  {{ apt_cmd }}
+              {%- endif %} "$${new_packages[@]}"
+          {%- endset %}
+            cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}") with $(printf '"%%s" ' {{ install_command }})"
+            {%- if target.dnf %}
+            while true; do
+                install_output=$({{ install_command }} 2>&1 1>/dev/null)
+                install_status=$?
+                case "$install_status" in
+                  0)
+                    break
+                  ;;
+                  200)
+                    echo "DNF could not acquire lock, retrying"
+                  ;;
+                  1)
+                    if grep -i "Failed to obtain rpm transaction lock." <<<"$install_output"; then
+                      echo "DNF still fucking sucks and doesn't report transaction lock failures."
+                    else
+                      break
+                    fi
+                  ;;
+                esac
+            done
+            {%- else %}
+            {{ install_command }}
+            {%- endif %}
+            {%- if target.post_install_command %}
+              {{ target.post_install_command }}
+            {%- endif %}
           fi
           if [[ "$lock_file" != "" ]]; then
             exec {lock_file}<&-
