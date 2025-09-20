@@ -20,5 +20,5 @@
          net.ipv4.tcp_mtu_probing=2
 
 
-         net.ipv4.tcp_base_mss=1024
+         net.ipv4.tcp_base_mss=1300
 
