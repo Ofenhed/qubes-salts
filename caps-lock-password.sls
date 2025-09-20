@@ -4,7 +4,7 @@
 {%- from "formatting.jinja" import salt_warning, systemd_shell %}
 {%- from "dependents.jinja" import add_dependencies %}
 
-{%- set p = "Systemd ask password caps indicator " %}
+{%- set p = "Systemd ask password caps indicator - " %}
 {%- set module_name = "systemd-ask-password-caps-indicator" %}
 {%- set mod_dir = "/lib/dracut/modules.d/91" + module_name %}
 {%- set systemd_dir = "/usr/lib/systemd/system" %}
