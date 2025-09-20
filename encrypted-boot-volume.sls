@@ -131,7 +131,7 @@
                 boot_path=$(realpath -- "$FULL_BOOT_PATH" 2>/dev/null || cat <<< "$FULL_BOOT_PATH")
                 set -e
                 function userdo() {
-                    sudo DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" -u "$user" "$@"
+                    pkexec --user "$user" env DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="$dbus" "$@"
                 }
                 if [ "$(userdo notify-send --urgency critical --action=explore=Explore "Could not write file to $boot_path")" == "explore" ]; then
                     userdo xdg-open "$FULL_BOOT_PATH"

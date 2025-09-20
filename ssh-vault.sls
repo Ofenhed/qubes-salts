@@ -118,9 +118,9 @@ add_ssh_askpass:
         SSH_VAULT_VM="{{ state.vault_vm }}"
 
         if [ "$SSH_VAULT_VM" != "" ]; then
-          export SSH_SOCK="/home/user/.SSH_AGENT_$SSH_VAULT_VM"
+          export SSH_SOCK="/var/run/user/1000/.SSH_AGENT_$SSH_VAULT_VM"
           rm -f "$SSH_SOCK"
-          sudo -u user /bin/sh -c "umask 177 && exec socat 'UNIX-LISTEN:$SSH_SOCK,fork' 'EXEC:qrexec-client-vm $SSH_VAULT_VM qubes.SshAgent'" &
+          pkexec --user user env SSH_VAULT_VM="$SSH_VAULT_VM" SSH_SOCK="$SSH_SOCK"  /bin/sh -c 'umask 177 && exec socat "UNIX-LISTEN:$SSH_SOCK,fork" "EXEC:qrexec-client-vm $SSH_VAULT_VM qubes.SshAgent" &'
         fi
   {% endif %}
 
@@ -138,7 +138,7 @@ bash_rc_split_ssh:
         SSH_VAULT_VM="{{ vault_vm }}"
 
         if [ "$SSH_VAULT_VM" != "" ]; then
-          export SSH_AUTH_SOCK="/home/user/.SSH_AGENT_$SSH_VAULT_VM"
+          export SSH_AUTH_SOCK="/var/run/user/1000/.SSH_AGENT_$SSH_VAULT_VM"
         fi
   {% else %}
     - append_if_not_found: False
