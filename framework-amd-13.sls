@@ -6,5 +6,6 @@
 {% if grains['id'] == 'dom0' %}
   {{ grub_options(cmdline_linux, 'Quiet boot', 'quiet', 'quiet-boot') }}
   {{ grub_options(cmdline_linux, 'Disable dom0 graphics', 'video=efifb:off nomodeset', 'disable-dom0-graphics', False) }}
+  {{ grub_options(cmdline_linux, 'Activate iommu passthrough', 'iommu=pt', 'iommu-passthrough') }}
   {{ grub_options(cmdline_xen, 'Fix shutdown issue', 'ioapic_ack=new', 'fix-shutdown-issue') }}
 {% endif %}

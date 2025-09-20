@@ -226,6 +226,8 @@ Restore {{ file }} from RPM:
   {{ grub_options(cmdline_linux, 'Disable vfio-pci vga', 'vfio-pci.disable_vga=1', None, do_attach) }}
   {{ grub_options(cmdline_linux, 'Blacklist dom0 graphics', 'rd.driver.blacklist=amdgpu', None, do_attach) }}
   {{ grub_options(cmdline_linux, 'Blacklist dom0 graphics fallback', 'rd.driver.blacklist=radeon', None, do_attach) }}
+  {#
   {{ grub_options(cmdline_linux, 'Activate iommu passthrough', 'iommu=pt', None, do_attach) }}
+  #}
 
 {% endif %}
