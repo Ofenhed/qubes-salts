@@ -2,11 +2,15 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {%- set install_and_run_path = "/usr/bin/install-and-exec" %}
-{%- set install_and_run_fifo_path = "/run/install-and-exec" %}
+{%- set install_cached_path = "/usr/bin/install-cached-package" %}
+{%- set install_cached_package_socket_path = "/run/install-cached-package" %}
 {%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
-{%- set install_and_run_service_name = "install-cached-package@.service" %}
-{%- set install_and_run_socket_name = "install-cached-package.socket" %}
-{%- set install_and_run_socket_group = "auto-install" %}
+{%- set install_cached_package_base_name = 'install-cached-package' %}
+{%- macro install_cached_package_service_name(name = '') -%}
+  {{ install_cached_package_base_name }}@{{ name }}.service
+{%- endmacro %}
+{%- set install_cached_package_socket_name = install_cached_package_base_name + ".socket" %}
+{%- set install_cached_package_socket_group = "auto-install" %}
 {%- set install_and_run_env_prefix = "INSTALL_AND_EXEC_PACKAGE_FOR_" %}
 {%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
 
@@ -44,8 +48,19 @@
                             ,post_install_command = None
                             ) %}
   {%- set post_install = namespace(import_gpgs = {}) %}
-  {%- macro gpg_filename(name) -%}
-    /etc/pki/rpm-gpg/RPM-GPG-KEY-{{ name }}
+  {%- macro gpg_filename(name) %}
+    {%- if target.dnf -%}
+      /etc/pki/rpm-gpg/RPM-GPG-KEY-{{ name }}.gpg
+    {%- elif target.apt -%}
+      /usr/share/keyrings/apt-keyring-{{ name }}.gpg
+    {%- endif %}
+  {%- endmacro %}
+  {%- macro gpg_url_from_path(path) %}
+    {%- if target.dnf -%}
+      file://{{ path }}
+    {%- else %}
+      {{- path }}
+    {%- endif %}
   {%- endmacro %}
 
   {%- if target.dnf %}
@@ -286,35 +301,49 @@ Notify qubes about installed updates:
       - cmd: {{p}}{{ remove_unused_cached_files }}
   {%- endif %}
 
-  {%- for download in target.downloaded %}
+  {%- macro maybe_with_repo(download, do_install = False) %}
+    {%- set action = "Install" if do_install else "Download" %}
     {%- if download is not string and (download['name'] is defined) and (download['repo'] is defined) and (download['repo']['name'] is defined) %}
-      {%- set salt_task_name_string = yaml_string(p + "Download " + download['name'] + " from external repo " + download['repo']['name']) %}
+      {%- set salt_task_name_string = yaml_string(p + action + " " + download['name'] + " from external repo " + download['repo']['name']) %}
 {{ salt_task_name_string }}:
   pkgrepo.managed:
-      {%- set repo_options=namespace(enabled=false, gpg_key=None, import_gpg=False) %}
+      {%- set repo_options=namespace(enabled=false, gpg_key=None, gpg_key_url=None, import_gpg=False) %}
       {%- for key, value in download['repo']|items %}
         {%- if key == 'enabled' %}
           {%- set repo_options.enabled = value %}
         {%- elif key == 'import_gpg' -%}
           {%- set repo_options.gpg_key = gpg_filename(download['repo']['name']) %}
+          {%- set repo_options.gpg_key_url = gpg_url_from_path(repo_options.gpg_key) %}
           {%- do post_install.import_gpgs.update({repo_options.gpg_key: value}) %}
-          {%- set post_install.import_gpg = True %}
+          {%- set repo_options.import_gpg = True %}
         {%- elif key == 'gpgkey' %}
           {%- if repo_options.gpg_key == None %}
             {%- set repo_options.gpg_key = value %}
           {%- endif %}
-        {%- else %}
+        {%- elif not target.apt %}
     - {{ yaml_string(key) }}: {{ yaml_string(value) }}
         {%- endif %}
       {%- endfor %}
+      {%- if target.apt %}
+        {%- set signed_by = ' [signed-by=' + repo_options.gpg_key_url + ']' if repo_options.gpg_key_url %}
+    - name: {{ download['repo']['type'] if download['repo']['type'] is defined else 'deb' }} {{- signed_by }} {{ download['repo']['url'] }}
+    - file: /etc/apt/sources.list.d/{{ download['repo']['name'] }}.list
+      {%- endif %}
     {%- if repo_options.import_gpg %}
     - require:
-      - file: {{ yaml_string(p + import_gpgs + ': ' + repo_options.gpg_key) }}
       - cmd: {{ yaml_string(p + import_gpgs + ': ' + repo_options.gpg_key) }}
+    {%- endif %}
+    {%- if repo_options.gpg_key %}
+    - gpgkey: {{ yaml_string(repo_options.gpg_key_url if repo_options.gpg_key_url else repo_options.gpg_key) }}
     {%- endif %}
     - enabled: {{ repo_options.enabled }}
       {%- if not target.dnf_workaround %}
-  pkg.downloaded:
+  pkg.
+    {%- if do_install -%}
+      installed
+    {%- else -%}
+      downloaded
+    {%- endif %}:
     - name: {{ yaml_string(download['name']) }}
     - enablerepo: {{ yaml_string(download['repo']['name']) }}
       {%- else %}
@@ -322,7 +351,7 @@ Notify qubes about installed updates:
     - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
     - env:
       - DNF_INSTALL_PACKAGE: {{ yaml_string(download['name']) }}
-      - DNF_INSTALL_COMMAND: dnf install "--downloadonly" "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
+      - DNF_INSTALL_COMMAND: dnf install {%- if not do_install %} "--downloadonly" {%- endif %} "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
       {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
@@ -334,23 +363,37 @@ Notify qubes about installed updates:
       - cmd: {{p}}{{ remove_unused_cached_files }}
       {%- endif %}
     {%- endif %}
+    {{- '\n' }}
+  {%- endmacro %}
+  {%- for download in target.downloaded %}
+    {{- maybe_with_repo(download) }}
+  {%- endfor %}
+  {%- for download in target.installed %}
+    {{- maybe_with_repo(download, do_install=True) }}
   {%- endfor %}
 
-  {%- if target.dnf %}
-    {%- for key,value in post_install.import_gpgs|items %}
-{{ yaml_string(p + import_gpgs + ': ' + key) }}:
+  {%- for key,value in post_install.import_gpgs|items %}
+    {%- set import_task_name = p + import_gpgs + ': ' + key %}
+{{ yaml_string(import_task_name) }}:
   file.managed:
-    - name: {{ yaml_string(key) }}
+    - name: {{ yaml_string(key if not target.apt else (key + ".b64")) }}
     - source: {{ yaml_string(value) }}
     - user: root
     - group: root
     - mode: 644
   cmd.run:
+    {%- if target.dnf %}
     - name: rpmkeys --import "$GPG_KEY_FILE"
+    {%- else %}
+    - name: gpg --dearmor <"$GPG_KEY_FILE.b64" >"$GPG_KEY_FILE"
+    {%- endif %}
     - env:
       - GPG_KEY_FILE: {{ yaml_string(key) }}
-    {%- endfor %}
-  {%- endif %}
+    - onchanges:
+      - file: {{ yaml_string(import_task_name) }}
+    - require_in:
+      - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+  {%- endfor %}
 
   {%- if target.dnf or target.apt %}
 {{p}}{{ yaml_string(install_and_run_path) }}:
@@ -369,21 +412,45 @@ Notify qubes about installed updates:
         if [ -f $target_path ]; then
             exec "$target_path" "$@"
         fi
-        exec {target}> >(socat - UNIX-CONNECT:{{ install_and_run_fifo_path }} 2>/dev/null)
-        socat_pid=$!
         install_target="$(basename -- "$self_path")"
-        cat <<<"${install_target}" >&${target}
-        cat <<<"" >&${target}
-        wait "$socat_pid"
+        {{ install_cached_path }} "${install_target}"
         exec "$target_path" "$@"
 
-{{p}}Create {{ install_and_run_socket_group }}:
-  group.present:
-    - name: {{ install_and_run_socket_group }}
-
-{{p}}{{ install_and_run_socket_name }}:
+{{p}}{{ yaml_string(install_cached_path) }}:
   file.managed:
-    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_socket_name) }}
+    - name: {{ yaml_string(install_cached_path) }}
+    - mode: 755
+    - user: root
+    - group: root
+    - replace: true
+    - contents: |
+        #!/bin/bash
+        # {{ salt_warning }}
+        set -e
+        coproc install_service { socat - UNIX-CONNECT:{{ install_cached_package_socket_path }}; }
+        socat_pid=$!
+        exec {install_service_in}<&${install_service[1]}-
+        exec {install_service_out}<&${install_service[0]}-
+        install_target="$(basename -- "$self_path")"
+        read service_name <&${install_service_out}
+        while [ $# -ge 1 ]; do
+            cat <<<"$1" >&${install_service_in}
+            shift
+        done
+        exec {install_service_in}<&-
+        wait "$socat_pid"
+        while ! systemctl list-units --state=activating --quiet | awk -v "service=$service_name" '(index($0, service) != 0) { exit 7 }'; do
+            sleep 1
+        done
+        systemctl is-active --quiet -- "$service_name"
+
+{{p}}Create {{ install_cached_package_socket_group }}:
+  group.present:
+    - name: {{ install_cached_package_socket_group }}
+
+{{p}}{{ install_cached_package_socket_name }}:
+  file.managed:
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_cached_package_socket_name) }}
     - mode: 444
     - user: root
     - group: root
@@ -391,28 +458,28 @@ Notify qubes about installed updates:
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        Description=Listen for install requests on {{ install_and_run_fifo_path }}
+        Description=Listen for install requests on {{ install_cached_package_socket_path }}
         ConditionFileNotEmpty={{ install_and_run_env_path }}
         [Socket]
-        ListenStream={{ install_and_run_fifo_path }}
+        ListenStream={{ install_cached_package_socket_path }}
         Accept=yes
         RemoveOnStop=yes
         SocketUser=user
-        SocketGroup={{ install_and_run_socket_group }}
+        SocketGroup={{ install_cached_package_socket_group }}
         SocketMode=0660
 
         [Install]
-        WantedBy=multi-user.target
+        WantedBy=multi-user.target qubes-core-agent.service
 
-{{p}}Enable {{ install_and_run_socket_name }}:
+{{p}}Enable {{ install_cached_package_socket_name }}:
   service.enabled:
-    - name: {{ install_and_run_socket_name }}
+    - name: {{ install_cached_package_socket_name }}
     - require:
-      - file: {{p}}{{ install_and_run_socket_name }}
+      - file: {{p}}{{ install_cached_package_socket_name }}
 
-{{p}}{{ yaml_string(install_and_run_service_name) }}:
+{{p}}{{ yaml_string(install_cached_package_service_name()) }}:
   file.managed:
-    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_and_run_service_name) }}
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_cached_package_service_name()) }}
     - mode: 444
     - user: root
     - group: root
@@ -424,7 +491,7 @@ Notify qubes about installed updates:
         CollectMode=inactive-or-failed
 
         [Service]
-        Type=oneshot
+        Type=notify
         RemainAfterExit=no
         EnvironmentFile={{ install_and_run_env_path }}
         ExecStart={%- call systemd_shell() -%}
@@ -433,23 +500,23 @@ Notify qubes about installed updates:
             exit 1
           fi
           . {{ install_and_run_env_path }}
-          exec {caller_fd}< <(socat FD:3 -)
+
+          coproc caller_fd { socat FD:3 -; }
+          exec {caller_in}<&$${caller_fd[1]}-
+          exec {caller_out}<&$${caller_fd[0]}-
+          cat <<<"{{ install_cached_package_service_name('%i') }}" >&$${caller_in}
           new_packages=()
           {%- if target.apt %}
           deb_files=()
           {%- endif %}
           enabled_repos=()
-          while read -r request_line <&$${caller_fd}; do
-            if [[ -z $request_line ]]; then
-              echo "Got empty line"
-              break
-            fi
+          echo "Waiting for packages"
+          while read -r request_line ; do
             binary_names="{{ install_and_run_env_prefix }}$${request_line//-/_}[@]"
             repo_names="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}[@]"
-            echo "Read $${binary_names} (value: $${!binary_names:-UNDEFINED})"
             if [[ -z "$${!binary_names:-}" ]]; then
               echo "Invalid binary name $request_line" >&2
-              exec $${caller_fd}<&-
+              exec $${caller_out}<&-
               exit 1
             fi
           {%- if target.dnf %}
@@ -468,7 +535,8 @@ Notify qubes about installed updates:
               new_packages+=( "$binary_name" )
           {%- endif %}
             done
-          done
+          done <&$${caller_out}
+          echo Installing: "$${new_packages[@]}"
           lock_file=""
           {%- set activate_lock %}
             {%- if target.apt %}
@@ -491,15 +559,15 @@ Notify qubes about installed updates:
           {%- set install_command %}
               {%- if target.dnf -%}
                   dnf install -Cy "$${enabled_repos[@]}"
-              {%- elif target.apt -%}
+              {%- elif target.apt %}
                   {%- set apt_cmd = "apt-get install -o DPkg::Lock::Timeout=60 --no-download --yes" %}
                   {%- set target.post_install_command = apt_cmd + " --fix-broken" %}
-                  {{ apt_cmd }}
+                  {{- apt_cmd }}
               {%- endif %} "$${new_packages[@]}"
           {%- endset %}
             cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}") with $(printf '"%%s" ' {{ install_command }})"
             {%- if target.dnf %}
-            while true; do
+            for i in {1..30}; do
                 install_output=$({{ install_command }} 2>&1 1>/dev/null)
                 install_status=$?
                 case "$install_status" in
@@ -509,26 +577,36 @@ Notify qubes about installed updates:
                   200)
                     echo "DNF could not acquire lock, retrying"
                   ;;
-                  1)
+                  *)
                     if grep -i "Failed to obtain rpm transaction lock." <<<"$install_output"; then
                       echo "DNF still fucking sucks and doesn't report transaction lock failures."
                     else
+                      cat <<<"$install_output" >&2
                       break
                     fi
                   ;;
                 esac
+                retry_delay="$$((i/10)).$$((i%%10))"
+                cat <<<"Retrying in $retry_delay seconds" >&2
+                sleep -- "$retry_delay"
             done
             {%- else %}
             {{ install_command }}
+            install_status=$?
             {%- endif %}
+            if [ $install_status -ne 0 ]; then
+                exit 1
+            fi
             {%- if target.post_install_command %}
               {{ target.post_install_command }}
             {%- endif %}
           fi
-          if [[ "$lock_file" != "" ]]; then
-            exec {lock_file}<&-
-          fi
-          exec {caller_fd}<&-
-        {%- endcall %}
+          systemd-notify --ready --exec \; sleep 10
+          # if [[ "$lock_file" != "" ]]; then
+          #   exec {lock_file}<&-
+          # fi
+          # exec {caller_in}<&-
+          # exec {caller_out}<&-
+     {%- endcall %}
   {%- endif %}
 {%- endif %}
