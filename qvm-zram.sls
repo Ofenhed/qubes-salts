@@ -17,8 +17,8 @@
 
         qvm-features-request supported-service.zram-swap=1
         qvm-features-request supported-service.zram-swap-disk-fallback=1
-        qvm-features-request supported-feature.vm-config.zram-size=1
-        qvm-features-request supported-feature.vm-config.zram-algorithm=1
+        qvm-features-request zram-size=1
+        qvm-features-request zram-algorithm=1
 
 /usr/lib/systemd/system/zram-swap.service:
   file.managed:
@@ -51,7 +51,7 @@
           # Disable zswap  in order to prevent zswap intercepting memory pages being swapped out before they reach zram
           echo 0 > /sys/module/zswap/parameters/enabled
 
-          if [ ! -e /run/qubes/service/zram-swap-disk-fallback ]; then
+          if [ ! -e /run/qubes-service/zram-swap-disk-fallback ]; then
             swapoff --all
           fi
           # Load module
@@ -107,5 +107,5 @@
         vm.swappiness=100
         vm.dirty_background_ratio=1
         vm.dirty_ratio=50
-        vm.oom_kill_allocating_task=1
+        # vm.oom_kill_allocating_task=1
 {% endif %}
