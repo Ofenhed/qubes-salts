@@ -123,7 +123,7 @@
   {%- set peers = salt['pillar.get']('wg:peers', []) %}
   {%- set peers_with_lookup = peers|rejectattr('endpoint-name', 'undefined')|list() %}
   {%- set wg = salt['pillar.get']('wg', {}) %}
-  {%- set resolve_boot_delay = salt['pillar.get']('wg:resolve-delay', '15s') %}
+  {%- set resolve_boot_delay = salt['pillar.get']('wg:resolve-delay', '30s') %}
   {%- macro wg_escape(key) %}
     {{- key | replace('+', '') | replace('=', '') }}
   {%- endmacro %}
@@ -157,14 +157,26 @@
         Description=Add dns lookup to peer
         After=wg-quick@{{ if_name }}.service
         Requires=wg-quick@{{ if_name }}.service
+        StopWhenUnneeded=yes
 
         [Service]
         Type=oneshot
+        {#
         ExecStartPre={%- call systemd_shell() %}
           transfer=$(wg show "$${wg_if_name}" latest-handshakes | grep ^"$${wg_peer}")
           vpn_receiced=$(awk '{ print $2 }' <<< "$transfer")
           vpn_sent=$(awk '{ print $3 }' <<< "$transfer")
+          echo "Sent $vpn_sent, received $vpn_receiced"
           [[ $vpn_receiced -eq 0 ]] && [[ $vpn_sent -ne 0 ]]
+        {%- endcall %}
+        #}
+        ExecStartPre={%- call systemd_shell() %}
+          resolve_uid=$(id -u systemd-resolve)
+          ip rule add uidrange "$resolve_uid-$resolve_uid" lookup main
+        {%- endcall %}
+        ExecStopPost={%- call systemd_shell() %}
+          resolve_uid=$(id -u systemd-resolve)
+          ip rule del uidrange "$resolve_uid-$resolve_uid" lookup main
         {%- endcall %}
         ExecCondition={%- call systemd_shell() %}
           latest_handshake=$(wg show {{ if_name }} latest-handshakes | grep ^"$${wg_peer}" | awk '{ print $2 }')
@@ -194,7 +206,10 @@
     - contents: |
         # {{ salt_warning }}
         [Service]
-        Environment='wg_if_name={{ if_name }}' 'wg_peer={{ peer['public-key'] }}' 'wg_endpoint={{ peer['endpoint-name'] }}'
+        Environment="wg_if_name={{ if_name }}"
+        Environment="wg_peer={{ peer['public-key'] }}"
+        Environment="wg_endpoint={{ peer['endpoint-name'] }}"
+        Environment="wg_original_endpoint={{ peer['endpoint'] }}"
       {%- endfor %}
 
 {{p}}Resolve service:
@@ -218,6 +233,7 @@
         {%- for peer in peers_with_lookup -%}
           {{ ' ' }} wg-resolve@{{ if_name }}-{{ wg_escape(peer['public-key']) }}.service
         {%- endfor %}
+        StopWhenUnneeded=yes
 
         [Service]
         Type=oneshot
@@ -269,6 +285,10 @@
         {%- if allow_forward_to_wan or allow_qube_forward %}  ; ip rule delete iif %i table main {%- endif %}
     {%- if wg['dns'] is defined %}
         DNS = {{ (wg['dns'] | join(', ')) if wg['dns'] is sequence else wg['dns'] }}
+    {%- endif %}
+    {%- set has_dns_name = namespace(d=False) %}
+    {%- if peers_with_lookup|length() > 0 %}
+        SaveConfig = true
     {%- endif %}
     {%- if wg['mtu'] is defined %}
         MTU = {{ wg['mtu'] }}
