@@ -144,7 +144,7 @@ Reinstall vchan-socket-proxy if it's corrupted:
     - source: {{ file }}
     - preserve: True
 
-{% set tmp_dir = salt['cmd.run']('mktemp -d') %}
+{% set tmp_dir = salt['cmd.script']('mktemp -d') %}
 Patch {{ file }} with vbios:
   cmd.run:
     - shell: /bin/bash
