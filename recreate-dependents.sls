@@ -2,7 +2,7 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {% if grains['id'] == 'dom0' %}
-  {% from "formatting.jinja" import yaml_escape, yaml_string, bash_argument %}
+  {% from "formatting.jinja" import yaml_string, bash_argument %}
   {% from "dependents.jinja" import add_dependencies, add_external_change_dependency, tasks, task_trigger_filename, task_command_filename, trigger_salt_name %}
 
 {{ add_external_change_dependency('grub', '/etc/default/grub') }}
