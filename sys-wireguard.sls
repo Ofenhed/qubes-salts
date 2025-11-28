@@ -174,12 +174,12 @@
           resolve_uid=$(id -u systemd-resolve)
           ip rule add uidrange "$resolve_uid-$resolve_uid" lookup main
         {%- endcall %}
-        ExecStopPost={%- call systemd_shell() %}
+        ExecStopPost=-{%- call systemd_shell() %}
           resolve_uid=$(id -u systemd-resolve)
           ip rule del uidrange "$resolve_uid-$resolve_uid" lookup main
         {%- endcall %}
         ExecCondition={%- call systemd_shell() %}
-          latest_handshake=$(wg show {{ if_name }} latest-handshakes | grep ^"$${wg_peer}" | awk '{ print $2 }')
+          latest_handshake=$(wg show {{ if_name }} latest-handshakes | awk -v "wg_peer=$${wg_peer}" '$1 == wg_peer { print $2; exit }')
           [[ $latest_handshake -eq 0 ]] || [[ $(($(date +%%s)-$latest_handshake)) -gt 180 ]]
         {%- endcall %}
         ExecStart={%- call systemd_shell() %}
@@ -285,10 +285,6 @@
         {%- if allow_forward_to_wan or allow_qube_forward %}  ; ip rule delete iif %i table main {%- endif %}
     {%- if wg['dns'] is defined %}
         DNS = {{ (wg['dns'] | join(', ')) if wg['dns'] is sequence else wg['dns'] }}
-    {%- endif %}
-    {%- set has_dns_name = namespace(d=False) %}
-    {%- if peers_with_lookup|length() > 0 %}
-        SaveConfig = true
     {%- endif %}
     {%- if wg['mtu'] is defined %}
         MTU = {{ wg['mtu'] }}
