@@ -3,6 +3,17 @@
 
 {%- set install_and_run_path = "/usr/bin/install-and-exec" %}
 {%- set install_cached_path = "/usr/bin/install-cached-package" %}
+{%- set apt_with_repo_suffix = "-with-repo" %}
+{%- macro apt_with_repo_name(subcommand = none) -%}
+  apt
+  {%- if subcommand is not none -%}
+    -{{ subcommand }}
+  {%- endif -%}
+  {{ apt_with_repo_suffix }}
+{%- endmacro %}
+{%- macro apt_with_repo_path(subcommand = none) -%}
+  /usr/bin/{{- apt_with_repo_name(subcommand = subcommand) }}
+{%- endmacro %}
 {%- set install_cached_package_socket_path = "/run/install-cached-package" %}
 {%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
 {%- set install_cached_package_base_name = 'install-cached-package' %}
@@ -15,7 +26,7 @@
 {%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
 
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
-  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script %}
+  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script, trim_common_whitespace %}
   {%- set p = "Template user installed - " %}
   {%- set upgrade_all = 'Upgrade all installed packages' %}
   {%- set upgrade_arch_keyring = 'Upgrade Arch linux keyrings' %}
@@ -45,6 +56,7 @@
                             ,installed = salt['pillar.get']('template-user-installed:installed', [])
                             ,downloaded = salt['pillar.get']('template-user-installed:downloaded', [])
                             ,purged = salt['pillar.get']('template-user-installed:purged', [])
+                            ,pre_install_command = None
                             ,post_install_command = None
                             ) %}
   {%- set post_install = namespace(import_gpgs = {}) %}
@@ -301,43 +313,72 @@ Notify qubes about installed updates:
       - cmd: {{p}}{{ remove_unused_cached_files }}
   {%- endif %}
 
+  {#
+  {%- macro apt_repo(task_name, filename, repo_type, url, ) %}
+    {%- if target.apt %}
+{{ yaml_string(task_name) }}:
+  file.managed:
+    - name: {{ yaml_string(options['name']) }}
+  #}
+
   {%- macro maybe_with_repo(download, do_install = False) %}
     {%- set action = "Install" if do_install else "Download" %}
     {%- if download is not string and (download['name'] is defined) and (download['repo'] is defined) and (download['repo']['name'] is defined) %}
       {%- set salt_task_name_string = yaml_string(p + action + " " + download['name'] + " from external repo " + download['repo']['name']) %}
 {{ salt_task_name_string }}:
-  pkgrepo.managed:
-      {%- set repo_options=namespace(enabled=false, gpg_key=None, gpg_key_url=None, import_gpg=False) %}
+      {%- set repo_options=namespace(enabled=false, gpg_key=None, gpg_key_url=None, import_gpg=False, raw_file = target.apt, options = {}, raw_options = {}) %}
       {%- for key, value in download['repo']|items %}
-        {%- if key == 'enabled' %}
+        {%- if key|lower == 'enabled' %}
           {%- set repo_options.enabled = value %}
-        {%- elif key == 'import_gpg' -%}
+        {%- elif key|lower == 'import_gpg' -%}
           {%- set repo_options.gpg_key = gpg_filename(download['repo']['name']) %}
           {%- set repo_options.gpg_key_url = gpg_url_from_path(repo_options.gpg_key) %}
           {%- do post_install.import_gpgs.update({repo_options.gpg_key: value}) %}
           {%- set repo_options.import_gpg = True %}
-        {%- elif key == 'gpgkey' %}
+        {%- elif key|lower == 'gpgkey' %}
           {%- if repo_options.gpg_key == None %}
             {%- set repo_options.gpg_key = value %}
           {%- endif %}
-        {%- elif not target.apt %}
-    - {{ yaml_string(key) }}: {{ yaml_string(value) }}
+        {%- else %}
+          {%- do repo_options.options.update({key|lower: value}) %}
+          {%- do repo_options.raw_options.update({key: value}) %}
         {%- endif %}
       {%- endfor %}
-      {%- if target.apt %}
-        {%- set signed_by = ' [signed-by=' + repo_options.gpg_key_url + ']' if repo_options.gpg_key_url %}
-    - name: {{ download['repo']['type'] if download['repo']['type'] is defined else 'deb' }} {{- signed_by }} {{ download['repo']['url'] }}
-    - file: /etc/apt/sources.list.d/{{ download['repo']['name'] }}.list
+      {%- if repo_options.raw_file %}
+  file.managed:
+    - name: {{ yaml_string(("/etc/apt/sources.list.d/" + repo_options.options['name'] + ".sources") if repo_options.options['name'] is defined else repo_options.options['file']) }}
+    - mode: 644
+    - user: root
+    - group: root
+    - replace: True
+    - backup: False
+    - contents: {% call yaml_string() %}{%- call trim_common_whitespace() -%}
+        ## {{ salt_warning }}
+        {%- for key, value in repo_options.raw_options|items %}
+          {%- if key|lower not in ['name'] %}
+        {{ key }}: {{ value }}
+          {%- endif %}
+        {%- endfor %}
+        Enabled: {{ "yes" if repo_options.enabled else "no" }}
+        {%- if repo_options.gpg_key %}
+        Signed-By: {{ repo_options.gpg_key_url }}
+        {%- endif %}
+        {%- endcall %}{%- endcall %}
+      {%- else %}
+  pkgrepo.managed:
+        {%- for key, value in repo_options.raw_options|items %}
+    - {{ yaml_string(key)}}: {{ yaml_string(value) }}
+        {%- endfor %}
+        {%- if repo_options.gpg_key %}
+    - gpgkey: {{ yaml_string(repo_options.gpg_key_url if repo_options.gpg_key_url else repo_options.gpg_key) }}
+        {%- endif %}
+    - enabled: {{ repo_options.enabled }}
       {%- endif %}
     {%- if repo_options.import_gpg %}
     - require:
       - cmd: {{ yaml_string(p + import_gpgs + ': ' + repo_options.gpg_key) }}
     {%- endif %}
-    {%- if repo_options.gpg_key %}
-    - gpgkey: {{ yaml_string(repo_options.gpg_key_url if repo_options.gpg_key_url else repo_options.gpg_key) }}
-    {%- endif %}
-    - enabled: {{ repo_options.enabled }}
-      {%- if not target.dnf_workaround %}
+      {%- if not target.dnf_workaround and not target.apt %}
   pkg.
     {%- if do_install -%}
       installed
@@ -346,17 +387,24 @@ Notify qubes about installed updates:
     {%- endif %}:
     - name: {{ yaml_string(download['name']) }}
     - enablerepo: {{ yaml_string(download['repo']['name']) }}
-      {%- else %}
+      {%- elif target.apt %}
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script('APT_INSTALL_COMMAND')) }}
+    - env:
+      - APT_REPO_NAME: {{ yaml_string(download['repo']['name']) }}
+      - APT_PACKAGE_NAME: {{ yaml_string(download['name']) }}
+      - APT_INSTALL_COMMAND: {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" update && {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" install --download-only "$APT_PACKAGE_NAME"
+      {%- elif target.dnf_workaround %}
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
     - env:
       - DNF_INSTALL_PACKAGE: {{ yaml_string(download['name']) }}
-      - DNF_INSTALL_COMMAND: dnf install {%- if not do_install %} "--downloadonly" {%- endif %} "--quiet" "-y" {{ bash_argument("--enablerepo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
+      - DNF_INSTALL_COMMAND: dnf install {%- if not do_install %} "--downloadonly" {%- endif %} "--quiet" "-y" {{ bash_argument("--enable-repo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
       {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
-      - pkgrepo: {{ salt_task_name_string }}
+      - {{ "file" if repo_options.raw_file else "pkgrepo" }}: {{ salt_task_name_string }}
       {%- if cache_tracking %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
@@ -459,7 +507,6 @@ Notify qubes about installed updates:
         # {{ salt_warning }}
         [Unit]
         Description=Listen for install requests on {{ install_cached_package_socket_path }}
-        ConditionFileNotEmpty={{ install_and_run_env_path }}
         [Socket]
         ListenStream={{ install_cached_package_socket_path }}
         Accept=yes
@@ -489,6 +536,8 @@ Notify qubes about installed updates:
         [Unit]
         Description=Install cached package
         CollectMode=inactive-or-failed
+        RefuseManualStart=yes
+        ConditionFileNotEmpty={{ install_and_run_env_path }}
 
         [Service]
         Type=notify
@@ -512,16 +561,20 @@ Notify qubes about installed updates:
           enabled_repos=()
           echo "Waiting for packages"
           while read -r request_line ; do
-            binary_names="{{ install_and_run_env_prefix }}$${request_line//-/_}[@]"
-            repo_names="{{ install_and_run_env_repo_prefix }}$${request_line//-/_}[@]"
+            binary_names="{{ install_and_run_env_prefix }}$${request_line//[-.]/_}[@]"
+            repo_names="{{ install_and_run_env_repo_prefix }}$${request_line//[-.]/_}[@]"
             if [[ -z "$${!binary_names:-}" ]]; then
               echo "Invalid binary name $request_line" >&2
               exec $${caller_out}<&-
               exit 1
             fi
-          {%- if target.dnf %}
+          {%- if target.dnf or target.apt %}
             for repo_name in $${!repo_names}; do
-              enabled_repos+=( --enablerepo="$repo_name" )
+              enabled_repos+=( --enable-repo="$repo_name" )
+            done
+          {%- else %}
+            for repo_name in $${!repo_names}; do
+              enabled_repos+=( "$repo_name" )
             done
           {%- endif %}
             for binary_name in $${!binary_names}; do
@@ -560,15 +613,19 @@ Notify qubes about installed updates:
               {%- if target.dnf -%}
                   dnf install -Cy "$${enabled_repos[@]}"
               {%- elif target.apt %}
-                  {%- set apt_cmd = "apt-get install -o DPkg::Lock::Timeout=60 --no-download --yes" %}
+                  {%- set apt_cmd = apt_with_repo_path("get") + " \"$${enabled_repos[@]}\" install -o DPkg::Lock::Timeout=60 --no-download --yes" %}
                   {%- set target.post_install_command = apt_cmd + " --fix-broken" %}
-                  {{- apt_cmd }}
+                  {%- set target.pre_install_command = apt_with_repo_path("get") + " \"$${enabled_repos[@]}\" update" %}
+                  {{- apt_cmd }} "$${enabled_repos[@]}"
               {%- endif %} "$${new_packages[@]}"
           {%- endset %}
             cat <<<"Installing $(printf '"%%s" ' "$${new_packages[@]}") with $(printf '"%%s" ' {{ install_command }})"
+            {%- if target.pre_install_command %}
+              {{ target.pre_install_command }}
+            {%- endif %}
             {%- if target.dnf %}
             for i in {1..30}; do
-                install_output=$({{ install_command }} 2>&1 1>/dev/null)
+                install_output=$(({{ install_command }}) 2>&1 1>/dev/null)
                 install_status=$?
                 case "$install_status" in
                   0)
@@ -594,19 +651,85 @@ Notify qubes about installed updates:
             {{ install_command }}
             install_status=$?
             {%- endif %}
-            if [ $install_status -ne 0 ]; then
-                exit 1
-            fi
             {%- if target.post_install_command %}
               {{ target.post_install_command }}
             {%- endif %}
+            if [ $install_status -ne 0 ]; then
+                exit 1
+            fi
           fi
-          systemd-notify --ready --exec \; sleep 10
+          systemd-notify --ready
+          sleep 10
           # if [[ "$lock_file" != "" ]]; then
           #   exec {lock_file}<&-
           # fi
           # exec {caller_in}<&-
           # exec {caller_out}<&-
      {%- endcall %}
+  {%- endif %}
+
+  {%- if target.apt %}
+    {%- for subcmd in ['get', 'cache'] %}
+{{p}}{{ apt_with_repo_name(subcmd) }} script:
+  file.symlink:
+    - name: {{ apt_with_repo_path(subcmd) }}
+    - target: {{ apt_with_repo_name() }}
+    {%- endfor %}
+
+{{p}}{{ apt_with_repo_name() }} script:
+  file.managed:
+    - name: {{ apt_with_repo_path() }}
+    - mode: 555
+    - user: root
+    - group: root
+    - replace: true
+    - contents: {% call yaml_string() %}{%- call trim_common_whitespace() %}
+        # {{ salt_warning }}
+        apt_path="${BASH_SOURCE[-1]%{{ apt_with_repo_suffix }}}"
+        {%- set unshare_script %}
+        apt_path="$0"
+        apt_repos=()
+        apt_args=()
+        while [ $# -ge 1 ]; do
+          case $1 in
+            --enablerepo=*)
+              apt_repos+=( "${1#--enablerepo=}" )
+              ;;
+            --enable-repo=*)
+              apt_repos+=( "${1#--enable-repo=}" )
+              ;;
+            --enablerepo | --enable-repo)
+              if [ $# -ge 2 ]; then
+                shift
+                apt_repos+=( "$1" )
+              else
+                echo "Need argument after --enable-repo"
+                exit 1
+              fi
+              ;;
+            *)
+              apt_args+=( "$1" )
+              ;;
+          esac
+          shift
+        done
+        if [ "{{ "${#apt_repos[@]}" }}" -eq 0 ]; then
+            exec "$apt_path" "${apt_args[@]}"
+        else
+            mount -t tmpfs none /tmp
+            for repo_name in "${apt_repos[@]}"; do
+              if ! [ -f "/tmp/repo-$repo_name.sources" ]; then
+                (grep -v 'Enabled:' <"/etc/apt/sources.list.d/$repo_name.sources"; echo 'Enabled: yes') >"/tmp/repo-$repo_name.sources"
+                mount -Br "/tmp/repo-$repo_name.sources" "/etc/apt/sources.list.d/$repo_name.sources"
+              fi
+            done
+            umount /tmp
+            exec unshare -m "$apt_path" "${apt_args[@]}"
+        fi
+        {%- endset %}
+        unshare_script={{ bash_argument(unshare_script, before='', after='') }}
+
+        exec unshare -m /bin/bash -c "$unshare_script" "$apt_path" "$@"
+     {%- endcall %}{%- endcall %}
   {%- endif %}
 {%- endif %}
