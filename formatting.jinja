@@ -32,13 +32,38 @@
     {%- endif %}
   {%- endmacro %}
   {%- set s=namespace(ws=None) %}
-  {%- for line in lines[1:] %}
+  {%- for line in lines %}
     {%- if line|trim != '' %}
-      {%- set line_spaces = space_prefix(line) %}
-      {%- set s.ws = line_spaces if s.ws == None or line_spaces < s.ws else s.ws %}
+      {%- set line_spaces = space_prefix(line) | int %}
+      {%- if not (line_spaces == 0 and loop.index == 1) %}
+        {%- set s.ws = line_spaces if s.ws == None or line_spaces < s.ws else s.ws %}
+      {%- endif %}
     {%- endif %}
   {%- endfor %}
-  {{- s.ws }}
+  {%- if s.ws == None %}
+    {{- '0' }}
+  {%- else %}
+    {{- s.ws }}
+  {%- endif %}
+{%- endmacro %}
+
+{%- macro trim_common_whitespace(caller='') %}
+  {%- set lines = (caller() if caller is callable else caller).split('\n') %}
+  {%- set prefix_len = common_whitespace(lines) | int %}
+  {%- set prefix_spaces %}
+    {%- for i in range(prefix_len) %}
+      {{- ' ' }}
+    {%- endfor %}
+  {%- endset %}
+  {%- for line in lines -%}
+    {{- '\n' if loop.index > 1 else '' }}
+    {%- set trimmed = line | replace(prefix_spaces, '', count=1) %}
+    {%- if prefix_spaces + trimmed == line %}
+      {{- trimmed }}
+    {%- else %}
+      {{- line }}
+    {%- endif %}
+  {%- endfor %}
 {%- endmacro %}
 
 {%- macro systemd_string(caller='') %}
@@ -48,7 +73,7 @@
 {%- endmacro %}
 
 {%- macro systemd_shell(shell=none, caller='') %}
-  {{- shell if shell is string else '/bin/bash' }} -c {{ systemd_string(caller=caller) }}
+  {{- shell if shell is string else '/bin/bash' }} -c {{ systemd_string(caller=trim_common_whitespace(caller=caller)) }}
 {%- endmacro %}
 
 {%- macro systemd_escape(caller='') %}
@@ -65,13 +90,20 @@
   {{- salt['cmd.run'](['sha256sum <"$sha_file"'], shell='/bin/sh', python_shell=True, runas='nobody', env={'sha_file': file}).split(' ', maxsplit=1)[0] }}
 {%- endmacro %}
 
-{%- macro yaml_escape(caller='', quote=none) %}
-  {{- ((caller() if caller is callable else caller) | replace("\\", "\\\\") | replace(quote, "\\" + (quote if quote is string else "\"")) | replace("\n", "\\n")) }}
+{%- macro yaml_escape(caller='') %}
+  {{- ((caller() if caller is callable else caller) | replace("\\", "\\\\") | replace("\"", "\\\"") | replace("\n", "\\n")) }}
 {%- endmacro %}
 
 {%- macro yaml_string(caller='') %}
-  {{- '"' }}{{- yaml_escape(caller = caller, quote = "\"") }}{{- '"' }}
+  {{- '"' }}
+    {{- yaml_escape(caller = caller) }}
+  {{- '"' }}
 {%- endmacro -%}
+
+{%- macro yaml_value(caller='') %}
+  {{- ' ' }}
+  {{- yaml_string(caller = caller) }}
+{%- endmacro %}
 
 {%- macro qube_name(name) %}
   {%- set numbers = "0123456789" %}
