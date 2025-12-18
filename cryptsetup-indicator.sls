@@ -121,7 +121,7 @@
                 echo "Missing module crypt"
                 return 1
             fi
-            return 0
+            return 255
         }
         
         # Module dependency requirements.
