@@ -47,7 +47,7 @@ cmd: {{ yaml_string(caller=trigger_salt_name(task)) }}
 {%- macro add_dependencies(task, caller='') %}
   {%- set content = caller() %}
   {%- set task_uid = sha256sum(content) %}
-"Task {{ yaml_escape(task, "\"") }} (uid={{ task_uid }})":
+"Task {{ yaml_escape(task) }} (uid={{ task_uid }})":
   {%- if task not in tasks %}
   test.fail_without_changes:
     - name: "Task {{ task }} is not defined"
@@ -69,7 +69,7 @@ cmd: {{ yaml_string(caller=trigger_salt_name(task)) }}
     - group: root
     - mode: 600
     - order: last
-    - contents: "{{ yaml_escape(file, "\"") }}: {{ sha256sum_file(file) }}"
+    - contents: "{{ yaml_escape(file) }}: {{ sha256sum_file(file) }}"
 
 {% call add_dependencies(task) %}
   - file: {{ yaml_string(name) }}
