@@ -119,8 +119,8 @@
     - require:
       - file: {{p}}{{ mod_dir }}
     - contents: |
-        {{ extra_pci_to_unbind_env_var[hide_all_usb_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-usb | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
-        {{ extra_pci_to_unbind_env_var[hide_all_network_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list -- sys-net | grep -Po '(?<=dom0:)[^ ]+'"]) | replace("\n", " ") | replace("_", ":") }}
+        {{ extra_pci_to_unbind_env_var[hide_all_usb_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list --with-sbdf -- sys-usb | grep -Po '^dom0:[\da-fA-F-_.]+\s+0000:\K[\da-fA-F:.]+(?= )'"]) | replace("\n", " ") }}
+        {{ extra_pci_to_unbind_env_var[hide_all_network_service_path] }}={{ salt["cmd.run"](["bash", "-c", "qvm-pci list --with-sbdf -- sys-net | grep -Po '^dom0:[\da-fA-F-_.]+\s+0000:\K[\da-fA-F:.]+(?= )'"]) | replace("\n", " ") }}
 
 {% for service_path in [hide_all_usb_service_path, hide_all_network_service_path] %}
 {{p}}{{ service_path }}:
