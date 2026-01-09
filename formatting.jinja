@@ -22,6 +22,10 @@
   {%- endcall %}
 {%- endmacro %}
 
+{%- macro yaml_format_exec_env_script(env_var, shell=none) %}
+  {{- yaml_string(caller=format_exec_env_script(env_var, shell=shell)) }}
+{%- endmacro %}
+
 {%- macro common_whitespace(lines) %}
   {%- macro space_prefix(line, idx=0) %}
     {%- set c = line[idx] %}
