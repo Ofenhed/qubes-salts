@@ -62,7 +62,6 @@
         luks_name=$(awk '{ print $1 }' <<< "$line")
         luks_systemd_name=$(systemd-escape -- "$luks_name")
         luks_udev_name="${luks_systemd_name//\\/\\\\}"
-        luks_udev_name="${luks_udev_name//\"/\\\"}"
 
         source_dev=$(awk {{ awk_arg_get_crypttab_source() }} <<< "$line")
         source_systemd_dev=$(systemd-escape -p -- "$source_dev")
@@ -121,14 +120,14 @@
                 echo "Missing module crypt"
                 return 1
             fi
+            if ! dracut_module_included systemd-ask-password; then
+                return 1
+            fi
             return 255
         }
         
         # Module dependency requirements.
         depends() {
-            # This module has external dependency on other module(s).
-            echo systemd-ask-password
-            # Return 0 to include the dependent module(s) in the initramfs.
             return 0
         }
         
