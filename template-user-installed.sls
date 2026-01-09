@@ -14,6 +14,9 @@
 {%- macro apt_with_repo_path(subcommand = none) -%}
   /usr/bin/{{- apt_with_repo_name(subcommand = subcommand) }}
 {%- endmacro %}
+{%- macro apt_with_repo_state(subcommand = none) %}
+  {{-p}}{{ apt_with_repo_name(subcommand = subcommand) }} script
+{%- endmacro %}
 {%- set install_cached_package_socket_path = "/run/install-cached-package" %}
 {%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
 {%- set install_cached_package_base_name = 'install-cached-package' %}
@@ -393,7 +396,9 @@ Notify qubes about installed updates:
     - env:
       - APT_REPO_NAME: {{ yaml_string(download['repo']['name']) }}
       - APT_PACKAGE_NAME: {{ yaml_string(download['name']) }}
-      - APT_INSTALL_COMMAND: {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" update && {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" install --download-only "$APT_PACKAGE_NAME"
+      - APT_INSTALL_COMMAND: {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" update && {{ apt_with_repo_path("get") }} --enable-repo "$APT_REPO_NAME" install -y --download-only "$APT_PACKAGE_NAME"
+    - require:
+      - file: {{ apt_with_repo_state("get") }}
       {%- elif target.dnf_workaround %}
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
@@ -670,13 +675,15 @@ Notify qubes about installed updates:
 
   {%- if target.apt %}
     {%- for subcmd in ['get', 'cache'] %}
-{{p}}{{ apt_with_repo_name(subcmd) }} script:
+{{ apt_with_repo_state(subcmd) }}:
   file.symlink:
     - name: {{ apt_with_repo_path(subcmd) }}
     - target: {{ apt_with_repo_name() }}
+    - require:
+      - file: {{ apt_with_repo_state() }}
     {%- endfor %}
 
-{{p}}{{ apt_with_repo_name() }} script:
+{{ apt_with_repo_state() }}:
   file.managed:
     - name: {{ apt_with_repo_path() }}
     - mode: 555
