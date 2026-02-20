@@ -94,9 +94,11 @@
 
   {%- endfor %}
 {%- elif vm_type == 'template' %}
+{%- from "ordering.jinja" import user_package_install %}
 
 {{p}}wireguard-tools:
   pkg.installed:
+    - order: {{ user_package_install }}
     - pkgs:
       - wireguard-tools
 

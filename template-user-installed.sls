@@ -29,7 +29,8 @@
 {%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
 
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
-  {% from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script, trim_common_whitespace %}
+  {%- from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script, trim_common_whitespace %}
+  {%- from "ordering.jinja" import download_cache_active, download_cache_cleared, system_upgrade, user_package_install, package_install_completed %}
   {%- set p = "Template user installed - " %}
   {%- set upgrade_all = 'Upgrade all installed packages' %}
   {%- set upgrade_arch_keyring = 'Upgrade Arch linux keyrings' %}
@@ -91,6 +92,7 @@
 {{p}}{{ upgrade_all }}:
   {%- if target.dnf_workaround %}
   cmd.run:
+    - order: {{ system_upgrade }}
     - name: dnf upgrade -y
     - unless: dnf check-update
   {%- else %}
@@ -114,9 +116,10 @@
     - pkg.autoremove: {}
   {%- endif %}
 
-Notify qubes about installed updates:
+{{p}}Notify qubes about installed updates:
   cmd.run:
     - name: /usr/lib/qubes/upgrades-status-notify
+    - order: {{ package_install_completed }}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
   {%- if target.apt %}
@@ -159,6 +162,7 @@ Notify qubes about installed updates:
   pkg.installed:
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+    - order: {{ user_package_install }}
     - pkgs:
   {%- call unique_lines() %}
     {%- for install in target.installed %}
@@ -182,6 +186,7 @@ Notify qubes about installed updates:
   pkg.installed:
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
+    - order: {{ user_package_install }}
     - name: neovim
     - unless:
       - fun: file.directory_exists
@@ -189,6 +194,7 @@ Notify qubes about installed updates:
 
 {{p}}{{ uninstall_vim }}:
   pkg.purged:
+    - order: {{ user_package_install }}
     - pkgs:
     {%- if target.fedora %}
       - vim-enhanced
@@ -224,6 +230,7 @@ Notify qubes about installed updates:
 {{p}}{{ activate_cached_file_usage_tracking }}:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING')) }}
+    - order: {{ download_cache_active - 1 }}
     - env:
       - DNF_ACTIVATE_CACHE_FILE_USAGE_TRACKING: {% call yaml_string() -%}
           set -e
@@ -241,6 +248,7 @@ Notify qubes about installed updates:
 {{p}}{{ remove_unused_cached_files }}:
   cmd.run:
     - name: {{ yaml_string(format_exec_env_script('DNF_REMOVE_UNUSED_FILES')) }}
+    - order: {{ download_cache_cleared - 1 }}
     - env:
       - AWK_FIND_UNTOUCHED_FILES: {% call yaml_string() %}
             {
@@ -310,6 +318,9 @@ Notify qubes about installed updates:
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
+  {%- if target.apt %}
+      - pkg: {{p}}{{ autoremove }}:
+  {%- endif %}
   {%- if cache_tracking %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
@@ -410,10 +421,13 @@ Notify qubes about installed updates:
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
       - {{ "file" if repo_options.raw_file else "pkgrepo" }}: {{ salt_task_name_string }}
-      {%- if cache_tracking %}
+      {%- if cache_tracking and not do_install %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
     - require_in:
       - cmd: {{p}}{{ remove_unused_cached_files }}
+      {%- endif %}
+      {%- if do_install %}
+    - order: {{ user_package_install }}
       {%- endif %}
     {%- endif %}
     {{- '\n' }}
