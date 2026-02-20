@@ -7,7 +7,7 @@
   {%- set p = "Set dom0 Xen Scheduler priority - " %}
   {%- set systemd_dir = "/usr/lib/systemd/system" %}
   {%- set dom0_priority_service_name = "dom0-priority.service" %}
-  {%- set dom0_weight = 512 %}
+  {%- set dom0_weight = 2048 %}
   
 {{p}}Add and enable service:
   file.managed:
