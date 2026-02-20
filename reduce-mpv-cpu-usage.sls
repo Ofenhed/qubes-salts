@@ -5,6 +5,7 @@
   {%- set p = "Reduce mpv cpu usage - " %}
   {%- set create_file = "Create config file" %}
   {%- set mpv_config_file = "/etc/mpv/mpv.conf" %}
+  {%- from "ordering.jinja" import package_installation_complete %}
 
 {{p}}{{create_file}}:
   file.managed:
@@ -20,6 +21,7 @@
 {{p}}Set mpv video output:
   file.blockreplace:
     - name: /etc/mpv/mpv.conf
+    - order: {{ package_installation_complete }}
     - marker_start: "# mpv CPU reduction >>>"
     - marker_end: "# <<< mpv CPU reduction"
     - show_changes: True

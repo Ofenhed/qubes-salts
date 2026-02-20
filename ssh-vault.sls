@@ -2,12 +2,13 @@
 # vim: set syntax=yaml ts=2 sw=2 sts=2 et :
 
 {%- from "formatting.jinja" import salt_warning, qube_name, yaml_string %}
-{%- set p = "ssh-vault" %}
+{%- from "ordering.jinja" import user_package_install %}
+{%- set p = "SSH Vault - " %}
 {%- set policy_file = "/etc/qubes/policy.d/50-ssh.policy" %}
 {%- set vm_type = salt['pillar.get']('qubes:type') %}
 
 {%- if grains['id'] == 'dom0' %}
-{{ p }}{{ policy_file }}:
+{{p}}{{ policy_file }}:
   file.managed:
     - name: {{ policy_file }}
     - user: root
@@ -32,8 +33,9 @@
   {%- endfor %}
 
 {%- elif vm_type == 'template' %}
-add_ssh_askpass:
+{{p}}Add ssh-askpass:
   pkg.installed:
+    - order: {{ user_package_install }}
     - pkgs:
   {%- if grains['os_family'] == 'Debian' %}
       - ssh-askpass-gnome
@@ -53,9 +55,9 @@ add_ssh_askpass:
     {%- endif %}
   {%- endfor %}
 
-/rw/home/user/.config/autostart/ssh-add.desktop:
+{{p}}Autostart ssh-add:
   {%- if not state.is_server %}
-  file.absent: []
+  file.absent:
   {%- else %}
   file.managed:
     - user: user
@@ -65,36 +67,17 @@ add_ssh_askpass:
     - dir_mode: 700
     - replace: false
     - contents: |
+        # {{ salt_warning }}
         [Desktop Entry]
         Name=ssh-add
         Exec=ssh-add -c
         Type=Application
   {%- endif %}
+    - name: /rw/home/user/.config/autostart/ssh-add.desktop
 
-{%- for file in ["copy-qubes-rpc", "ssh-agent"] %}
-Remove {{file}}:
+{{p}}Install qubes-rpc service qubes.SshAgent on boot:
+  {%- if not state.is_server %}
   file.absent:
-    - name: /rw/config/rc.local.d/{{ file }}.rc
-{%- endfor %}
-
-/rw/config/rc.local.d/90-copy-qubes-rpc.rc:
-  {%- if not state.is_server %}
-  file.absent: []
-  {%- else %}
-  file.managed:
-    - user: root
-    - group: root
-    - mode: 755
-    - makedirs: true
-    - dir_mode: 755
-    - replace: true
-    - contents: |
-        ln -s /rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent /etc/qubes-rpc/
-  {%- endif %}
-
-/rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent:
-  {%- if not state.is_server %}
-  file.absent: []
   {%- else %}
   file.managed:
     - user: root
@@ -105,18 +88,14 @@ Remove {{file}}:
     - replace: true
     - contents: |
         #!/bin/sh
-        # Qubes App Split SSH Script
-
-        # safeguard - Qubes notification bubble
-        notify-send "[$(qubesdb-read /name)] SSH agent access from: $QREXEC_REMOTE_DOMAIN"
-
-        # SSH connection
-        socat - "UNIX-CONNECT:$SSH_AUTH_SOCK"
+        # {{ salt_warning }}
+        ln -s /rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent /etc/qubes-rpc/
   {%- endif %}
+    - name: /rw/config/rc.local.d/90-copy-qubes-rpc.rc
 
-/rw/config/rc.local.d/89-ssh-agent.rc:
-  {%- if not state.is_client %}
-  file.absent: []
+{{p}}Create qubes-rpc service qubes.SshAgent:
+  {%- if not state.is_server %}
+  file.absent:
   {%- else %}
   file.managed:
     - user: root
@@ -126,6 +105,32 @@ Remove {{file}}:
     - dir_mode: 755
     - replace: true
     - contents: |
+        #!/bin/sh
+        # {{ salt_warning }}
+        # Qubes App Split SSH Script
+
+        # safeguard - Qubes notification bubble
+        notify-send "[$(qubesdb-read /name)] SSH agent access from: $QREXEC_REMOTE_DOMAIN"
+
+        # SSH connection
+        socat - "UNIX-CONNECT:$SSH_AUTH_SOCK"
+  {%- endif %}
+    - name: /rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent
+
+{{p}}Autostart ssh-agent:
+  {%- if not state.is_client %}
+  file.absent:
+  {%- else %}
+  file.managed:
+    - user: root
+    - group: root
+    - mode: 755
+    - makedirs: true
+    - dir_mode: 755
+    - replace: true
+    - contents: |
+        #!/bin/sh
+        # {{ salt_warning }}
         # SPLIT SSH CONFIGURATION
         # replace "vault" with your AppVM name which stores the ssh private key(s)
         SSH_VAULT_VM="{{ state.vault_vm }}"
@@ -136,8 +141,9 @@ Remove {{file}}:
           pkexec --user user env SSH_VAULT_VM="$SSH_VAULT_VM" SSH_SOCK="$SSH_SOCK"  /bin/sh -c 'umask 177 && exec socat "UNIX-LISTEN:$SSH_SOCK,fork" "EXEC:qrexec-client-vm $SSH_VAULT_VM qubes.SshAgent" &'
         fi
   {% endif %}
+    - name: /rw/config/rc.local.d/89-ssh-agent.rc
 
-bash_rc_split_ssh:
+{{p}}bashrc split SSH configuration:
   {%- set start_marker = "# SPLIT SSH CONFIGURATION >>>" %}
   {%- set end_marker =  "# <<< SPLIT SSH CONFIGURATION"%}
   file.blockreplace:
