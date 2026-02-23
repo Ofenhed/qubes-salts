@@ -319,7 +319,7 @@
       - {{ upgrade_all_type }}: {{p}}{{ upgrade_all }}
       - pkg: {{p}}{{ installed }}
   {%- if target.apt %}
-      - pkg: {{p}}{{ autoremove }}:
+      - pkg: {{p}}{{ autoremove }}
   {%- endif %}
   {%- if cache_tracking %}
       - cmd: {{p}}{{ activate_cached_file_usage_tracking }}
