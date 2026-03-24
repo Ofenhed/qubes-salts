@@ -176,8 +176,8 @@
           fi
           sleep infinity & ln -s "/proc/$!" {{ proc_parent }}
         {%- endcall %}
-        ExecStartPost=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi/"
-        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt df -h "$BOOT_SHADOW" "$BOOT_SHADOW/efi/"
+        ExecStartPost=nsenter --mount={{ proc_parent }}/ns/mnt df -h "${BOOT_SHADOW}" "${BOOT_SHADOW}/efi/"
+        ExecStop=nsenter --mount={{ proc_parent }}/ns/mnt df -h "${BOOT_SHADOW}" "${BOOT_SHADOW}/efi/"
         ProtectSystem=strict
         PrivateTmp=true
 
