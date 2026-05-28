@@ -13,7 +13,9 @@
 {%- set tmp_uki_config_file = tmp_dir + '/uki.conf' %}
 {%- set tmp_current_elf = tmp_dir + '/current.elf' %}
 {%- set tmp_initrd_image = tmp_dir + '/initrd.img' %}
+{%- set tmp_dracut_uki = tmp_dir + '/dracut.uki' %}
 {%- set tmp_new_elf = tmp_dir + '/new_qubes.efi' %}
+{%- set tmp_new_elf_stripped = tmp_dir + '/new_qubes_stripped.efi' %}
 
 {%- set efi_dir = '/boot/efi/EFI/qubes' %}
 {%- set efi_current = 'qubes.efi' %}
@@ -25,7 +27,8 @@
 
 {%- set check_plain_text_dependencies = "Check plain text dependencies" %}
 {%- set verify_plain_text_dependencies = "Verify xen image" %}
-{%- set create_dracut_image = "Create dracut image" %}
+{%- set create_dracut_image = "Create dracut initrd" %}
+{%- set create_dracut_kernel = "Create dracut kernel" %}
 {%- set create_config = "Create config" %}
 {%- set create_uki = "Create unified kernel" %}
 {%- set install_uki = "Install unified kernel" %}
@@ -37,9 +40,9 @@
 
 {{p}}{{ check_plain_text_dependencies }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script('CHECK_PLAIN_TEXT_DEPENDENCIES')) }}
+    - name: {{ yaml_string(format_exec_env_script('check_plain_text_dependencies')) }}
     - env:
-      - CHECK_PLAIN_TEXT_DEPENDENCIES: {% call yaml_string() %}
+      - check_plain_text_dependencies: {% call yaml_string() %}
         set -e
         echo Hypervisor
         rpm -Vv xen-hypervisor | awk '{ if ($2 ~ /^\/boot\/efi\/EFI\/qubes\/xen-.*\.efi$/) print $1 "\t" $2 }' | tee {{ bash_argument(tmp_xen_verification_output) }}
@@ -54,9 +57,9 @@
     {%- set checks = {'S': 'file size', '5': 'checksum', 'L': 'symbolic link', 'D': 'device', 'U': 'user', 'G': 'group', '?': 'Unreadable file' } %}
     - require:
       - cmd: {{p}}{{ check_plain_text_dependencies }}
-    - name: {{ yaml_string(format_exec_env_script('VERIFY_PLAIN_TEXT_DEPENDENCIES')) }}
+    - name: {{ yaml_string(format_exec_env_script('verify_plain_text_dependencies')) }}
     - env:
-      - VERIFY_PLAIN_TEXT_DEPENDENCIES: {% call yaml_string() %}
+      - verify_plain_text_dependencies: {% call yaml_string() %}
           set -e
           for input_file in {% for status_file in [tmp_xen_verification_output, tmp_kernel_verification_output] %}
             {{- bash_argument(status_file) }}
@@ -77,9 +80,9 @@
 
 {{p}}{{ create_dracut_image }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script('BUILD_DRACUT_IMAGE')) }}
+    - name: {{ yaml_string(format_exec_env_script('build_dracut_image')) }}
     - env:
-      - BUILD_DRACUT_IMAGE: {% call yaml_string() %}
+      - build_dracut_image: {% call yaml_string() %}
           {%- set build_command = salt['pillar.get']('salt-build-targets:dracut', none) %}
           {%- if build_command is none %}
           echo "Pillar salt-build-targets:dracut not set"
@@ -97,9 +100,9 @@
 
 {{p}}{{ create_config }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script("CREATE_CONFIG")) }}
+    - name: {{ yaml_string(format_exec_env_script("create_config")) }}
     - env:
-      - CREATE_CONFIG: |
+      - create_config: |
             (
             set -e
             . /etc/default/grub
@@ -127,15 +130,16 @@
 
 {{p}}{{ create_uki }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script("CREATE_UKI")) }}
+    - name: {{ yaml_string(format_exec_env_script("create_uki")) }}
     - require:
       - cmd: {{p}}{{ create_config }}
       - cmd: {{p}}{{ verify_plain_text_dependencies }}
       - cmd: {{p}}{{ create_dracut_image }}
     - env:
-      - CREATE_UKI: {% call yaml_string() %}
+      - create_uki: {% call yaml_string() %}
           set -e
           xen_image=$(awk '{ print $2 }' < {{ bash_argument(tmp_xen_verification_output) }})
+          initrd_image='{{ tmp_initrd_image }}'
           kernel_image=$(cat < {{ bash_argument(tmp_current_kernel_output) }})
           echo initrd: {{ bash_argument(tmp_initrd_image) }}
           uki_generate_args=()
@@ -149,23 +153,25 @@
           {%- endif %}
           echo "Xen image: $xen_image"
           echo "Kernel image: $kernel_image"
+          echo "Initrd image: $initrd_image"
           echo "Config:"
           cat {{ bash_argument(tmp_uki_config_file) }}
           echo
 
           {%- for prefix in ["printf '\"%s\" '", ""] %}
-          {{ prefix }} /usr/lib/qubes/uki-generate "${uki_generate_args[@]}" "$xen_image" {{ bash_argument(tmp_uki_config_file) }} "$kernel_image" {{ bash_argument(tmp_initrd_image) }} {{ bash_argument(tmp_new_elf) }}
+          {{ prefix }} /usr/lib/qubes/uki-generate "${uki_generate_args[@]}" "$xen_image" {{ bash_argument(tmp_uki_config_file) }} "$kernel_image" "$initrd_image" {{ bash_argument(tmp_new_elf) }}
+          {{ prefix }} objcopy --remove-section=.ramdisk -- {{ bash_argument(tmp_new_elf) }} {{ bash_argument(tmp_new_elf_stripped) }}
           {%- endfor %}
         {%- endcall %}
 
 {{p}}{{ create_efi_backup }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script("CREATE_EFI_BACKUP")) }}
+    - name: {{ yaml_string(format_exec_env_script("create_efi_backup")) }}
     - stateful: True
     - require:
       - cmd: {{p}}{{ create_uki}}
     - env:
-      - AWK_SCRIPT_EXTRACT_UID: {% call yaml_string() %}
+      - awk_script_extract_uid: {% call yaml_string() %}
           {
             for (i=1; i<=NF; i++) {
               if ($i ~ /^{{ cmdline_variable_name | regex_escape }}/) {
@@ -176,11 +182,11 @@
             }
           }
       {%- endcall %}
-      - CREATE_EFI_BACKUP: {% call yaml_string() %}
+      - create_efi_backup: {% call yaml_string() %}
           set -e
           cp {{ bash_argument(efi_current_path) }} {{ bash_argument(tmp_current_elf) }}
           {%- macro extract_uid(filename) -%}
-          $(awk "$AWK_SCRIPT_EXTRACT_UID" < {{ bash_argument(filename) }})
+          $(awk "$awk_script_extract_uid" < {{ bash_argument(filename) }})
           {%- endmacro %}
           current_uid={{- extract_uid('/proc/cmdline') }}
           if [ "$current_uid" == "" ]; then
@@ -211,12 +217,12 @@
 
 {{p}}{{ set_nextboot }}:
   cmd.run:
-    - name: {{ yaml_string(format_exec_env_script("SET_NEXTBOOT")) }}
+    - name: {{ yaml_string(format_exec_env_script("set_nextboot")) }}
     - stateful: True
     - require:
       - file: {{p}}{{ install_uki}}
     - env:
-      - SET_NEXTBOOT: {% call yaml_string() %}
+      - set_nextboot: {% call yaml_string() %}
           #!/bin/sh
 
           set -e
@@ -246,9 +252,17 @@
     - order: last
 
 {{p}}Show nextboot information:
-  test.show_notification:
-    - text: Reboot to complete the installation
-    - order: last
+  cmd.run:
+    - name: {{ yaml_string(format_exec_env_script("show_notification")) }}
+    - env:
+      - show_notification: {% call yaml_string() %}
+          #!/bin/sh
+
+          users=( $(for user in $(users); do echo "$user"; done | awk '!seen[$0]++ { print $0 }') )
+          for user in "${users[@]}"; do
+              sudo -u "$user" notify-send --urgency=critical --expire-time=0 "Reboot" "to use the new UKI"
+          done
+        {%- endcall %}
     - onchanges:
       - cmd: {{p}}{{ set_nextboot }}
     - require:
