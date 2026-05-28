@@ -36,6 +36,16 @@
     - name: zswap.service
     - require:
       - file: {{ create_service }}
+
+Discourage swapping:
+  file.managed:
+    - name: /etc/sysctl.d/20-swapping.conf
+    - user: root
+    - group: root
+    - mode: 444
+    - contents: |
+        # {{ salt_warning }}
+        vm.swappiness=0
         
 {{p}}Add swap discard:
   file.replace:
