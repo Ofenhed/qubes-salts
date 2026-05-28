@@ -22,23 +22,24 @@
   - actions:
     - present
     - prefs
-{%- set vm_preferences = {
+{%- set vm_preferences_default = {
     'label': 'red',
-    'template': salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()),
-    'include-in-backups': 'false',
     'maxmem': 0,
     'memory': 512,
     'vcpus': 1,
+} %}
+{%- set vm_preferences_forced = {
+    'template': salt['pillar.get']('qvm:sys-wireguard-' + if_name + ':template', default_template()),
+    'include-in-backups': 'false',
     'class': 'AppVM'
 } %}
 
   - present:
-    {%- for key, value in vm_preferences.items() %}
+    {%- for key, value in vm_preferences_default.items() %}
     - {{ key }}: {{ value }}
     {%- endfor %}
   - prefs:
-    - include-in-backups: false
-    {%- for key, value in vm_preferences.items() %}
+    {%- for key, value in vm_preferences_forced.items() %}
     - {{ key }}: {{ value }}
     {%- endfor %}
 
@@ -57,13 +58,15 @@
     - name: {{ netvm }}
   {%- endif %}
 
-{%- set dvm_preferences = {
+{%- set dvm_preferences_default = {
     'label': 'red',
-    'template': 'sys-wireguard-' + if_name + '-dvm',
-    'include-in-backups': 'false',
     'maxmem': 0,
     'memory': 512,
     'vcpus': 1,
+} %}
+{%- set dvm_preferences_forced = {
+    'template': 'sys-wireguard-' + if_name + '-dvm',
+    'include-in-backups': 'false',
     'class': 'DispVM'
 } %}
 {{ vm_task_name(vm) }}:
@@ -71,26 +74,36 @@
   - name: {{ vm }}
   - require:
     - qvm: {{ vm_task_name(netvm) }}
-    - qvm: {{ vm_task_name(dvm_preferences['template']) }}
+    - qvm: {{ vm_task_name(dvm_preferences_forced['template']) }}
   - actions:
     - present
     - prefs
+    - features
+    - service
 
   - present:
-    {%- for key, value in dvm_preferences.items() %}
+    {%- for key, value in dvm_preferences_default.items() %}
     - {{ key }}: {{ value }}
     {%- endfor %}
   - prefs:
-    - include-in-backups: false
-    {%- for key, value in dvm_preferences.items() %}
+    {%- for key, value in dvm_preferences_forced.items() %}
     - {{ key }}: {{ value }}
     {%- endfor %}
     {%- endif %}
     - netvm: {{ salt['pillar.get']('qvm:' + vm + ':netvm', 'sys-net') }}
     - provides-network: true
-    - features:
-        - enable:
-            - qubes-firewall
+  - features:
+      - enable:
+          - qubes-firewall
+      - set:
+          - appmenus-dispvm: '0'
+  - service:
+      - enable:
+        - minimal-netvm
+        - servicevm
+      - disable:
+        - qubes-update-check
+
 
   {%- endfor %}
 {%- elif vm_type == 'template' %}
