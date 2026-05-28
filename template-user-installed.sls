@@ -95,13 +95,13 @@
 {{p}}{{ tasks.upgrade_all }}:
   {%- if target.dnf_workaround %}
   cmd.run:
-    - order: {{ system_upgrade }}
     - name: dnf upgrade -y
     - unless: dnf check-update
   {%- else %}
   pkg.uptodate:
     - refresh: True
   {%- endif %}
+    - order: {{ system_upgrade }}
   {%- set upgrade_all_type = 'cmd' if target.dnf_workaround else 'pkg' %}
 
   {%- if target.pacman %}
