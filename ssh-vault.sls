@@ -18,18 +18,26 @@
     - contents: |
         # {{ salt_warning }}
   {%- set allowed_vms = salt['pillar.get']('user:ssh-vault:allow', {}) %}
+  {%- set allow_tag = salt['pillar.get']('user:ssh-vault:allow-tag', {}) %}
   {%- set maybe_allowed_vms = salt['pillar.get']('user:ssh-vault:ask', {}) %}
+  {%- set ask_tag = salt['pillar.get']('user:ssh-vault:ask-tag', none) %}
   {%- set tab = '\t' %}
-  {%- macro write_entry(qvm_name, vault_name, action) %}
+  {%- macro write_entry(vault_user, vault_name, action) %}
      {%- set target = {'allow': 'target', 'ask': 'default_target'} %}
      {%- set e_vault_name = qube_name(vault_name) %}
-        qubes.SshAgent {{- tab + "*" + tab + qube_name(qvm_name) + tab + e_vault_name + tab + action + " " + target[action] + "=" + e_vault_name }}
+        qubes.SshAgent {{- tab + "*" + tab + vault_user + tab + e_vault_name + tab + action + " " + target[action] + "=" + e_vault_name }}
   {%- endmacro %}
   {%- for (qvm_entry, vault) in allowed_vms.items() %}
-    {{- write_entry(qvm_entry, vault, "allow") }}
+    {{- write_entry(qube_name(qvm_entry), vault, "allow") }}
   {%- endfor %}
   {%- for (qvm_entry, vault) in maybe_allowed_vms.items() %}
-    {{- write_entry(qvm_entry, vault, "ask") }}
+    {{- write_entry(qube_name(qvm_entry), vault, "ask") }}
+  {%- endfor %}
+  {%- for (qvm_entry, vault) in allow_tag.items() %}
+    {{- write_entry("@tag:" + qube_name(qvm_entry), vault, "allow") }}
+  {%- endfor %}
+  {%- for (qvm_entry, vault) in ask_tag.items() %}
+    {{- write_entry("@tag:" + qube_name(qvm_entry), vault, "ask") }}
   {%- endfor %}
 
 {%- elif vm_type == 'template' %}
@@ -45,10 +53,23 @@
 
 {%- elif vm_type == 'app' %}
   {%- set vault_table = salt['pillar.get']('user:ssh-vault', {}) %}
+  {%- set my_tags = pillar['qubes']['tags'] %}
   {%- set vault_allowed = vault_table['allow']|d({}) %}
+  {%- set vault_allowed_tag = vault_table['allow-tag']|d({}) %}
   {%- set vault_maybe_allowed = vault_table['ask']|d({}) %}
+  {%- set vault_ask_tag = vault_table['ask-tag']|d({}) %}
   {%- set vault_vm = (vault_allowed[grains['id']]|d(none)) or (vault_maybe_allowed[grains['id']]|d(none)) %}
   {%- set state = namespace(is_server=false, is_client=vault_vm is not none, vault_vm = vault_vm) %}
+  {%- if not state.is_client %}
+    {%- for tag_dict in [vault_allowed_tag, vault_ask_tag] %}
+      {%- for (tag, vm) in tag_dict.items()  %}
+        {%- if tag in my_tags %}
+          {%- set state.is_client = true %}
+          {%- set state.vault_vm = vm %}
+        {%- endif %}
+      {%- endfor %}
+    {%- endfor %}
+  {%- endif %}
   {%- for (vm, vm_vault) in (vault_allowed|items|list) + (vault_maybe_allowed|items|list) %}
     {%- if (not state.is_server) and vm_vault == grains['id'] %}
       {%- set state.is_server = true %}
@@ -117,7 +138,8 @@
   {%- endif %}
     - name: /rw/bind-dirs/etc/qubes-rpc/qubes.SshAgent
 
-{{p}}Autostart ssh-agent:
+{%- set autostart_ssh_agent = "Autostart ssh-agent" %}
+{{p}}{{ autostart_ssh_agent }}:
   {%- if not state.is_client %}
   file.absent:
   {%- else %}
@@ -141,7 +163,17 @@
           pkexec --user user env SSH_VAULT_VM="$SSH_VAULT_VM" SSH_SOCK="$SSH_SOCK"  /bin/sh -c 'umask 177 && exec socat "UNIX-LISTEN:$SSH_SOCK,fork" "EXEC:qrexec-client-vm $SSH_VAULT_VM qubes.SshAgent" &'
         fi
   {% endif %}
-    - name: /rw/config/rc.local.d/89-ssh-agent.rc
+{%- set agent_startup_script = "/rw/config/rc.local.d/89-ssh-agent.rc" %}
+    - name: {{ agent_startup_script }}
+
+{%- if state.is_client %}
+{{p}}Run ssh-agent if it was just created:
+  cmd.run:
+    - shell: /bin/bash
+    - name: "setsid {{ agent_startup_script }} >/dev/null 2>&1 </dev/null &"
+    - onchanges:
+        - file: {{p}}{{ autostart_ssh_agent }}
+{%- endif %}
 
 {{p}}bashrc split SSH configuration:
   {%- set start_marker = "# SPLIT SSH CONFIGURATION >>>" %}
