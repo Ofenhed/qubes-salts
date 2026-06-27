@@ -418,10 +418,11 @@
     {%- if allow_forward_to_wan %}
              # Forward traffic from the VPN
              iifname "{{ if_name }}" ct direction original counter oifgroup 1 counter accept
+             iifgroup 1 oifname "{{ if_name }}" ct direction reply counter accept
     {%- endif %}
     {%- if allow_qube_forward %}
              iifname "{{ if_name }}" ct direction reply counter oifgroup 2 counter accept
-             oifname "{{ if_name }}" counter accept
+             iifgroup 2 oifname "{{ if_name }}" direction original counter accept
     {%- endif %}
              counter drop
            }
