@@ -17,15 +17,19 @@
 {%- macro apt_with_repo_state(subcommand = none) %}
   {{-p}}{{ apt_with_repo_name(subcommand = subcommand) }} script
 {%- endmacro %}
-{%- set install_cached_package_socket_path = "/run/install-cached-package" %}
+{%- set install_cached_package_trigger_socket_path = "/run/install-cached-package" %}
 {%- set install_and_run_env_path = "/rw/config/auto-install.env" %}
 {%- set install_cached_package_base_name = 'install-cached-package' %}
+{%- set install_cached_package_trigger_base_name = 'install-cached-package-trigger' %}
+{%- macro install_cached_package_trigger_service_name(name = '') -%}
+  {{ install_cached_package_trigger_base_name }}@{{ name }}.service
+{%- endmacro %}
 {%- macro install_cached_package_service_name(name = '') -%}
   {{ install_cached_package_base_name }}@{{ name }}.service
 {%- endmacro %}
 {%- set start_time_file = '/run/template-user-installed-start-time' %}
-{%- set install_cached_package_socket_name = install_cached_package_base_name + ".socket" %}
-{%- set install_cached_package_socket_group = "auto-install" %}
+{%- set install_cached_package_trigger_socket_name = install_cached_package_trigger_base_name + ".socket" %}
+{%- set install_cached_package_trigger_socket_group = "auto-install" %}
 {%- set install_and_run_env_prefix = "INSTALL_AND_EXEC_PACKAGE_FOR_" %}
 {%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
 
@@ -38,6 +42,7 @@
         upgrade_arch_keyring = 'Upgrade Arch linux keyrings',
         autoremove = 'Remove unused packages',
         keep_cache_for_non_template = 'Keep dnf cache for non template VMs',
+        dont_install_recommended = "Don't install recommended dependencies",
         activate_cached_file_usage_tracking = 'Activate cached file usage tracking',
         remove_unused_cached_files = 'Remove unused cache files',
         installed = 'Install user wanted packages',
@@ -422,7 +427,7 @@
     - name: {{ yaml_string(format_exec_env_script('DNF_INSTALL_COMMAND')) }}
     - env:
       - DNF_INSTALL_PACKAGE: {{ yaml_string(download['name']) }}
-      - DNF_INSTALL_COMMAND: dnf install {%- if not do_install %} "--downloadonly" {%- endif %} "--quiet" "-y" {{ bash_argument("--enable-repo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
+      - DNF_INSTALL_COMMAND: dnf install {%- if not do_install %} "--downloadonly" {%- else %} "--setopt=install_weak_deps=False {%- endif %} "--quiet" "-y" {{ bash_argument("--enable-repo=" + download['repo']['name']) }} "$DNF_INSTALL_PACKAGE"
       {%- endif %}
     - require:
       - {{ upgrade_all_type }}: {{p}}{{ tasks.upgrade_all }}
@@ -501,30 +506,33 @@
         #!/bin/bash
         # {{ salt_warning }}
         set -e
-        coproc install_service { socat - UNIX-CONNECT:{{ install_cached_package_socket_path }}; }
+        coproc install_service { socat - UNIX-CONNECT:{{ install_cached_package_trigger_socket_path }}; }
         socat_pid=$!
         exec {install_service_in}<&${install_service[1]}-
         exec {install_service_out}<&${install_service[0]}-
         install_target="$(basename -- "$self_path")"
-        read service_name <&${install_service_out}
+        service_names=()
         while [ $# -ge 1 ]; do
-            cat <<<"$1" >&${install_service_in}
-            shift
+          cat <<<"$1" >&${install_service_in}
+          read service_name <&${install_service_out}
+          service_names+=( "$service_name" )
+          shift
         done
         exec {install_service_in}<&-
         wait "$socat_pid"
-        while ! systemctl list-units --state=activating --quiet | awk -v "service=$service_name" '(index($0, service) != 0) { exit 7 }'; do
+        for install_service in "${service_names[@]}"; do
+          while ! systemctl is-active --quiet "$install_service"; do
             sleep 1
+          done
         done
-        systemctl is-active --quiet -- "$service_name"
 
-{{p}}Create {{ install_cached_package_socket_group }}:
+{{p}}Create {{ install_cached_package_trigger_socket_group }}:
   group.present:
-    - name: {{ install_cached_package_socket_group }}
+    - name: {{ install_cached_package_trigger_socket_group }}
 
-{{p}}{{ install_cached_package_socket_name }}:
+{{p}}{{ install_cached_package_trigger_socket_name }}:
   file.managed:
-    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_cached_package_socket_name) }}
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_cached_package_trigger_socket_name) }}
     - mode: 444
     - user: root
     - group: root
@@ -532,23 +540,23 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        Description=Listen for install requests on {{ install_cached_package_socket_path }}
+        Description=Listen for install requests on {{ install_cached_package_trigger_socket_path }}
         [Socket]
-        ListenStream={{ install_cached_package_socket_path }}
+        ListenStream={{ install_cached_package_trigger_socket_path }}
         Accept=yes
         RemoveOnStop=yes
         SocketUser=user
-        SocketGroup={{ install_cached_package_socket_group }}
+        SocketGroup={{ install_cached_package_trigger_socket_group }}
         SocketMode=0660
 
         [Install]
         WantedBy=multi-user.target qubes-core-agent.service
 
-{{p}}Enable {{ install_cached_package_socket_name }}:
+{{p}}Enable {{ install_cached_package_trigger_socket_name }}:
   service.enabled:
-    - name: {{ install_cached_package_socket_name }}
+    - name: {{ install_cached_package_trigger_socket_name }}
     - require:
-      - file: {{p}}{{ install_cached_package_socket_name }}
+      - file: {{p}}{{ install_cached_package_trigger_socket_name }}
 
 {{p}}{{ yaml_string(install_cached_package_service_name()) }}:
   file.managed:
@@ -560,61 +568,54 @@
     - contents: |
         # {{ salt_warning }}
         [Unit]
-        Description=Install cached package
+        Description=Install %I
         CollectMode=inactive-or-failed
-        RefuseManualStart=yes
         ConditionFileNotEmpty={{ install_and_run_env_path }}
 
         [Service]
         Type=notify
-        RemainAfterExit=no
+        RemainAfterExit=yes
+        TimeoutSec=600
         EnvironmentFile={{ install_and_run_env_path }}
+        Environment="cached_package=%I"
         ExecStart={%- call systemd_shell() -%}
           if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
             echo "Invalid permissions for {{ install_and_run_env_path }}"
             exit 1
           fi
-          . {{ install_and_run_env_path }}
 
-          coproc caller_fd { socat FD:3 -; }
-          exec {caller_in}<&$${caller_fd[1]}-
-          exec {caller_out}<&$${caller_fd[0]}-
-          cat <<<"{{ install_cached_package_service_name('%i') }}" >&$${caller_in}
           new_packages=()
           {%- if target.apt %}
           deb_files=()
           {%- endif %}
           enabled_repos=()
           echo "Waiting for packages"
-          while read -r request_line ; do
-            binary_names="{{ install_and_run_env_prefix }}$${request_line//[-.]/_}[@]"
-            repo_names="{{ install_and_run_env_repo_prefix }}$${request_line//[-.]/_}[@]"
-            if [[ -z "$${!binary_names:-}" ]]; then
-              echo "Invalid binary name $request_line" >&2
-              exec $${caller_out}<&-
-              exit 1
-            fi
+          binary_names="{{ install_and_run_env_prefix }}$${cached_package}[@]"
+          repo_names="{{ install_and_run_env_repo_prefix }}$${cached_package}[@]"
+          if [[ -z "$${!binary_names:-}" ]]; then
+            echo "Invalid binary name $request_line" >&2
+            exit 1
+          fi
           {%- if target.dnf or target.apt %}
-            for repo_name in $${!repo_names}; do
-              enabled_repos+=( --enable-repo="$repo_name" )
-            done
+          for repo_name in $${!repo_names}; do
+            enabled_repos+=( --enable-repo="$repo_name" )
+          done
           {%- else %}
-            for repo_name in $${!repo_names}; do
-              enabled_repos+=( "$repo_name" )
-            done
+          for repo_name in $${!repo_names}; do
+            enabled_repos+=( "$repo_name" )
+          done
           {%- endif %}
-            for binary_name in $${!binary_names}; do
+          for binary_name in $${!binary_names}; do
           {%- if target.apt %}
-              if [ -f "$binary_name" ]; then
-                deb_files+=( "$binary_name" )
-              else
-                new_packages+=( "$binary_name" )
-              fi
+            if [ -f "$binary_name" ]; then
+              deb_files+=( "$binary_name" )
+            else
+              new_packages+=( "$binary_name" )
+            fi
           {%- else %}
               new_packages+=( "$binary_name" )
           {%- endif %}
-            done
-          done <&$${caller_out}
+          done
           echo Installing: "$${new_packages[@]}"
           lock_file=""
           {%- set activate_lock %}
@@ -689,6 +690,49 @@
           if [[ "$lock_file" != "" ]]; then
             exec {lock_file}<&-
           fi
+          # exec {caller_in}<&-
+          # exec {caller_out}<&-
+     {%- endcall %}
+
+{{p}}{{ yaml_string(install_cached_package_trigger_service_name()) }}:
+  file.managed:
+    - name: {{ yaml_string("/usr/lib/systemd/system/" + install_cached_package_trigger_service_name()) }}
+    - mode: 444
+    - user: root
+    - group: root
+    - replace: true
+    - contents: |
+        # {{ salt_warning }}
+        [Unit]
+        Description=Install cached package trigger
+        CollectMode=inactive-or-failed
+        RefuseManualStart=yes
+        ConditionFileNotEmpty={{ install_and_run_env_path }}
+
+        [Service]
+        Type=notify
+        RemainAfterExit=no
+        TimeoutSec=600
+        EnvironmentFile={{ install_and_run_env_path }}
+        ExecStart={%- call systemd_shell() -%}
+          if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
+            echo "Invalid permissions for {{ install_and_run_env_path }}"
+            exit 1
+          fi
+
+          coproc caller_fd { socat FD:3 -; }
+          exec {caller_in}<&$${caller_fd[1]}-
+          exec {caller_out}<&$${caller_fd[0]}-
+          new_packages=()
+          set -e
+          while read -r request_line ; do
+            echo "Waiting for install of $request_line"
+            package=$(systemd-escape "$${request_line//[-.]/_}")
+            cat <<<"{{ install_cached_package_service_name('$package') }}" >&$${caller_in}
+            systemctl start "{{ install_cached_package_service_name('$package') }}"
+            echo "Waiting for next package"
+          done <&$${caller_out}
+          systemd-notify --ready
           # exec {caller_in}<&-
           # exec {caller_out}<&-
      {%- endcall %}
