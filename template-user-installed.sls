@@ -30,8 +30,8 @@
 {%- set start_time_file = '/run/template-user-installed-start-time' %}
 {%- set install_cached_package_trigger_socket_name = install_cached_package_trigger_base_name + ".socket" %}
 {%- set install_cached_package_trigger_socket_group = "auto-install" %}
-{%- set install_and_run_env_prefix = "INSTALL_AND_EXEC_PACKAGE_FOR_" %}
-{%- set install_and_run_env_repo_prefix = "INSTALL_AND_EXEC_REPO_FOR_" %}
+{%- set install_and_run_env_prefix = "package_for_" %}
+{%- set install_and_run_env_repo_prefix = "repo_for_" %}
 
 {%- if grains['id'] != 'dom0' and salt['pillar.get']('qubes:type') == 'template' %}
   {%- from "formatting.jinja" import yaml_string, unique_lines, salt_warning, systemd_shell, bash_argument, escape_bash, format_exec_env_script, trim_common_whitespace %}
@@ -511,19 +511,15 @@
         exec {install_service_in}<&${install_service[1]}-
         exec {install_service_out}<&${install_service[0]}-
         install_target="$(basename -- "$self_path")"
-        service_names=()
+        read service_name <&${install_service_out}
         while [ $# -ge 1 ]; do
           cat <<<"$1" >&${install_service_in}
-          read service_name <&${install_service_out}
-          service_names+=( "$service_name" )
           shift
         done
         exec {install_service_in}<&-
         wait "$socat_pid"
-        for install_service in "${service_names[@]}"; do
-          while ! systemctl is-active --quiet "$install_service"; do
-            sleep 1
-          done
+        while systemctl is-active --quiet "{{ install_cached_package_trigger_service_name("$service_name") }}"; do
+          sleep 1
         done
 
 {{p}}Create {{ install_cached_package_trigger_socket_group }}:
@@ -573,12 +569,13 @@
         ConditionFileNotEmpty={{ install_and_run_env_path }}
 
         [Service]
-        Type=notify
-        RemainAfterExit=yes
+        Type=exec
+        RemainAfterExit=no
         TimeoutSec=600
         EnvironmentFile={{ install_and_run_env_path }}
         Environment="cached_package=%I"
         ExecStart={%- call systemd_shell() -%}
+          set -e
           if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
             echo "Invalid permissions for {{ install_and_run_env_path }}"
             exit 1
@@ -634,6 +631,7 @@
             dpkg -i "$${deb_files[@]}"
           fi
           {%- endif %}
+          install_all_status=0
           if [ {{'$${#new_packages[@]}'}} -gt 0 ]; then
             {{- activate_lock }}
           {%- set install_command %}
@@ -682,16 +680,16 @@
               {{ target.post_install_command }}
             {%- endif %}
             if [ $install_status -ne 0 ]; then
-                exit 1
+                install_all_status="$install_status"
+                break
             fi
           fi
-          systemd-notify --ready
-          sleep 10
           if [[ "$lock_file" != "" ]]; then
             exec {lock_file}<&-
           fi
           # exec {caller_in}<&-
           # exec {caller_out}<&-
+          exit "$install_all_status"
      {%- endcall %}
 
 {{p}}{{ yaml_string(install_cached_package_trigger_service_name()) }}:
@@ -714,6 +712,7 @@
         RemainAfterExit=no
         TimeoutSec=600
         EnvironmentFile={{ install_and_run_env_path }}
+        Environment="service_id=%i"
         ExecStart={%- call systemd_shell() -%}
           if [[ "$(stat --format='%%a %%U %%G' "{{ install_and_run_env_path }}")" != "644 root root" ]]; then
             echo "Invalid permissions for {{ install_and_run_env_path }}"
@@ -723,18 +722,21 @@
           coproc caller_fd { socat FD:3 -; }
           exec {caller_in}<&$${caller_fd[1]}-
           exec {caller_out}<&$${caller_fd[0]}-
-          new_packages=()
           set -e
+          systemd-notify --ready
+          cat <<<"$service_id" >&$${caller_in}
           while read -r request_line ; do
             echo "Waiting for install of $request_line"
             package=$(systemd-escape "$${request_line//[-.]/_}")
-            cat <<<"{{ install_cached_package_service_name('$package') }}" >&$${caller_in}
-            systemctl start "{{ install_cached_package_service_name('$package') }}"
+            install_service="{{ install_cached_package_service_name('$package') }}"
+            systemctl start -- "$install_service"
+            while systemctl is-active -q -- "$install_service"; do
+              sleep 0.25s
+            done
             echo "Waiting for next package"
           done <&$${caller_out}
-          systemd-notify --ready
-          # exec {caller_in}<&-
-          # exec {caller_out}<&-
+          exec {caller_in}<&-
+          exec {caller_out}<&-
      {%- endcall %}
   {%- endif %}
 
