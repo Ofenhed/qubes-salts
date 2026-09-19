@@ -569,7 +569,7 @@
         ConditionFileNotEmpty={{ install_and_run_env_path }}
 
         [Service]
-        Type=exec
+        Type=oneshot
         RemainAfterExit=no
         TimeoutSec=600
         EnvironmentFile={{ install_and_run_env_path }}
@@ -681,7 +681,6 @@
             {%- endif %}
             if [ $install_status -ne 0 ]; then
                 install_all_status="$install_status"
-                break
             fi
           fi
           if [[ "$lock_file" != "" ]]; then
@@ -689,6 +688,9 @@
           fi
           # exec {caller_in}<&-
           # exec {caller_out}<&-
+          if [ $install_all_status -eq 0 ]; then
+            systemctl mask --runtime -- {{ install_cached_package_service_name("%i") }}
+          fi
           exit "$install_all_status"
      {%- endcall %}
 
@@ -729,10 +731,7 @@
             echo "Waiting for install of $request_line"
             package=$(systemd-escape "$${request_line//[-.]/_}")
             install_service="{{ install_cached_package_service_name('$package') }}"
-            systemctl start -- "$install_service"
-            while systemctl is-active -q -- "$install_service"; do
-              sleep 0.25s
-            done
+            systemctl start --wait -- "$install_service" 2>/dev/null || true
             echo "Waiting for next package"
           done <&$${caller_out}
           exec {caller_in}<&-
